@@ -8,7 +8,9 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <string>
+#include <vector>
 
 #include "../ini.hpp"
 #include "../settings.hpp"

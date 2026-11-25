@@ -264,7 +264,7 @@ void* __cdecl hook_ability_icon(std::uint32_t v1, std::uint32_t v2) noexcept
     return g_orig_ability_icon(v1, v2);
 }
 
-std::uint8_t __cdecl hook_magic_filter(const std::uint8_t* spell_res) noexcept
+std::uint8_t __cdecl hook_magic_filter(const std::uint8_t* spell_res)
 {
     if (spell_res != nullptr) {
         std::uint16_t spell_id = 0;
@@ -621,7 +621,7 @@ void install_if_ready()
         st.owner = "soulspire";
         if (can_use_at != 0) {
             st.rva = static_cast<std::uint32_t>(can_use_at - base);
-            if (imports::detour(reinterpret_cast<CanShowSpellFn>(can_use_at), 5, &hook_magic_filter, g_orig_can_use_spell)) {
+            if (imports::detour<CanShowSpellFn>(reinterpret_cast<CanShowSpellFn>(can_use_at), 5, &hook_magic_filter, g_orig_can_use_spell)) {
                 st.installed = true;
                 st.detail = "detour installed (5B)";
                 caps |= kCapMagicVisibility;
