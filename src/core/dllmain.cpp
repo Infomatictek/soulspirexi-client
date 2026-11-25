@@ -80,6 +80,7 @@
 #include "screenshot.hpp"
 #include "session.hpp"
 #include "settings.hpp"
+#include "soulspire/soulspire.hpp"
 #include "uiscale.hpp"
 #include "window.hpp"
 
@@ -270,6 +271,7 @@ extern "C" DWORD WINAPI VanaCoreInstall(LPVOID param)
     vanacore::packetflow::install(g_boot.settings_ini); // [client] packetflow: the game sends sooner once the server answers
     vanacore::packetwatch::install(g_boot.settings_ini); // [client] packets.watch: the server's packets logged as they come
     vanacore::packets::configure(g_boot.settings_ini); // [client] packets.keepactions: an action an addon blocked still plays
+    vanacore::soulspire::install(g_boot.install_dir, g_boot.settings_ini); // [soulspire] enabled: VanaCore-native Soulspire engine
     vanacore::mcp::install(g_boot.install_dir, g_boot.settings_ini); // [mcp] enabled: the MCP server
     vanacore::discord::install(g_boot.settings_ini); // [discord] enabled: the character and zone on Discord
     g_installed = true;

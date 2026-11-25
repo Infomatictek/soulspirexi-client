@@ -27,6 +27,7 @@
 #include "packetwatch.hpp"
 #include "plugins.hpp"
 #include "scan.hpp"
+#include "soulspire/soulspire.hpp"
 #include "trusts.hpp"
 #include "zoneload.hpp"
 
@@ -318,7 +319,8 @@ size_t process(bool incoming, const std::uint8_t* buffer, size_t size, std::uint
         const std::lock_guard lock(g_waiting_lock);
         waiting = !g_waiting[incoming].empty();
     }
-    if (!waiting && !plugins::wants_packets() && !addons::wants_packets() && !(incoming && equipstats::wants_packets())) {
+    if (!waiting && !plugins::wants_packets() && !addons::wants_packets() && !(incoming && equipstats::wants_packets()) &&
+        !(incoming && soulspire::wants_packets())) {
         remember_all(incoming, buffer, size < capacity ? size : capacity);
         if (out != buffer)
             std::memcpy(out, buffer, size < capacity ? size : capacity);
@@ -368,12 +370,16 @@ size_t process(bool incoming, const std::uint8_t* buffer, size_t size, std::uint
             std::memset(received + length, 0, sizeof(received) - length);
             data = received;
         }
+        if (incoming)
+            soulspire::on_packet_in(static_cast<std::uint16_t>(head & 0x1FF), data, length);
         const bool by_plugin = plugins::on_packet(incoming, static_cast<std::uint16_t>(head & 0x1FF),
                                                   static_cast<std::uint32_t>(length), data, modified, chunk_size, chunk, false, false);
         if (by_plugin && incoming)
             packetwatch::blocked("a plugin", head & 0x1FF);
         bool blocked = addons::on_packet(incoming, static_cast<std::uint16_t>(head & 0x1FF), static_cast<std::uint32_t>(length),
                                          data, modified, chunk_size, chunk, false, by_plugin);
+        if (!blocked && incoming && soulspire::suppress_incoming_for_game(static_cast<std::uint16_t>(head & 0x1FF), data, length))
+            blocked = true;
         // An action from the server an addon blocked: the game has it all the same, without its chat lines
         if (blocked && !by_plugin && fresh && (head & 0x1FF) == kAction && g_keep_actions.load()) {
             keep_action(packet, length, modified);

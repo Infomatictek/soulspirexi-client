@@ -277,6 +277,11 @@ exit /b 0</Command>
     <ClCompile Include="zonebatch.cpp" />
     <ClCompile Include="occlusion.cpp" />
     <ClCompile Include="zonelines.cpp" />
+    <ClCompile Include="soulspire\state.cpp" />
+    <ClCompile Include="soulspire\packets.cpp" />
+    <ClCompile Include="soulspire\hooks.cpp" />
+    <ClCompile Include="soulspire\lua_bridge.cpp" />
+    <ClCompile Include="soulspire\soulspire.cpp" />
     <ClCompile Include="sparkles.cpp" />
     <ClCompile Include="groundmarks.cpp" />
   </ItemGroup>
@@ -532,6 +537,11 @@ exit /b 0</Command>
     <ClInclude Include="zoneweather.hpp" />
     <ClInclude Include="zonefloor.hpp" />
     <ClInclude Include="zonelines.hpp" />
+    <ClInclude Include="soulspire\state.hpp" />
+    <ClInclude Include="soulspire\packets.hpp" />
+    <ClInclude Include="soulspire\hooks.hpp" />
+    <ClInclude Include="soulspire\lua_bridge.hpp" />
+    <ClInclude Include="soulspire\soulspire.hpp" />
     <ClInclude Include="sparkles.hpp" />
     <ClInclude Include="groundmarks.hpp" />
   </ItemGroup>

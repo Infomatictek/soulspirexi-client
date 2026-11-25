@@ -12,6 +12,8 @@
 
 #include "../ini.hpp"
 #include "../settings.hpp"
+#include "../soulspire/packets.hpp"
+#include "../soulspire/state.hpp"
 #include "../../launcher/login.hpp"
 
 namespace vanacore::log {
@@ -382,6 +384,116 @@ int main()
             closesocket(plain_listener);
         }
         WSACleanup();
+    }
+
+    // ---- SoulspireXI VanaCore-native state & packet engine tests (CLIENT-MODERN-001 Phase A+B) ----
+    {
+        using namespace vanacore::soulspire;
+        EngineState st;
+        st.set_enabled(true);
+
+        // 1. Authoritative JSON identity registry loading (Shinobi job=13 branch=1, Berserker job=1 branch=2)
+        const char* ident_json = R"({
+            "schemaVersion": 1,
+            "registryHash": "cf86aa59ff8d16c6",
+            "souls": [
+                {"jobId": 13, "branchId": 1, "key": "shinobi", "name": "Shinobi", "abbr": "SHN"},
+                {"jobId": 1,  "branchId": 2, "key": "berserker", "name": "Berserker", "abbr": "BSK"}
+            ]
+        })";
+        check(st.load_identities_json(ident_json, "unit_test"), "Soulspire loads soul-identities JSON");
+        std::string abbr, full;
+        check(st.resolve_label(13, 1, false, abbr) && abbr == "SHN", "Shinobi short label resolves to SHN");
+        check(st.resolve_label(13, 1, true, full) && full == "Shinobi", "Shinobi full label resolves to Shinobi");
+        std::uint8_t j = 0, b = 0;
+        check(st.soul_key_to_pair("Shinobi", j, b) && j == 13 && b == 1, "soul_key_to_pair resolves Shinobi -> (13,1)");
+
+        // 2. Binary 0x1FF CRYS & 0x061 job/level packet decoding
+        std::uint8_t pkt_61[16]{};
+        pkt_61[0x0C] = 13; // NIN
+        pkt_61[0x0D] = 75; // Lv.75
+        packets::on_incoming(st, 0x061, pkt_61, sizeof(pkt_61), 100);
+
+        std::uint8_t pkt_1ff[16]{};
+        std::memcpy(pkt_1ff + 4, "CRYS", 4);
+        pkt_1ff[8] = 1;  // ver
+        pkt_1ff[9] = 1;  // op
+        pkt_1ff[10] = 13; // NIN
+        pkt_1ff[11] = 1;  // Shinobi
+        const std::uint32_t cid = 424242;
+        std::memcpy(pkt_1ff + 12, &cid, 4);
+        packets::on_incoming(st, 0x1FF, pkt_1ff, sizeof(pkt_1ff), 200);
+        const ActiveSoul active = st.active_soul();
+        check(active.known && active.job == 13 && active.branch == 1 && active.effective_level == 75 && active.character_id == cid,
+              "0x1FF CRYS + 0x061 activates Shinobi Lv.75");
+
+        // 3. Action catalog + Shadow Squadron: Ni compaction & description formatting
+        ActionRecord ss_ni{};
+        ss_ni.job = 13;
+        ss_ni.branch = 1;
+        ss_ni.kind = ActionKind::Spell;
+        ss_ni.action_id = 339;
+        ss_ni.name = "Shadow Squadron: Ni";
+        ss_ni.description = "Summons 3 offensive shadow clones that independently strike your target.";
+        check(st.replace_actions({ss_ni}) == 1, "replace_actions stores Shadow Squadron: Ni");
+        ActionRecord found{};
+        check(st.lookup_action(ActionKind::Spell, 339, found) && found.name == "Shadow Squadron: Ni",
+              "lookup_action returns Shadow Squadron: Ni for active Shinobi");
+        const std::string row16 = compact_action_row_name("Shadow Squadron: Ni", 16);
+        check(row16.size() <= 16 && row16.find(": Ni") != std::string::npos,
+              "compact_action_row_name preserves ': Ni' tier suffix within 16 chars");
+
+        // 4. Visibility rules by effective level
+        VisibilityRecord vis_show{13, 1, ActionKind::Spell, 339, 37, VisibilityRuleAction::Show};
+        VisibilityRecord vis_hide{13, 1, ActionKind::Spell, 338, 1, VisibilityRuleAction::Hide};
+        check(st.replace_visibility({vis_show, vis_hide}) == 2, "replace_visibility stores rules");
+        check(st.decide_visibility(ActionKind::Spell, 339, 75) == VisibilityDecision::Show, "Shadow Squadron: Ni shown at Lv.75");
+        check(st.decide_visibility(ActionKind::Spell, 339, 10) == VisibilityDecision::Hide, "Shadow Squadron: Ni hidden at Lv.10");
+        check(st.decide_visibility(ActionKind::Spell, 338, 75) == VisibilityDecision::Hide, "hidden spell suppressed");
+        check(st.decide_visibility(ActionKind::Spell, 999, 75) == VisibilityDecision::Unmanaged, "unspecified spell remains unmanaged");
+
+        // 5. Weapon rules JSON (Berserker DUAL_2H Great Axe skill=6)
+        const char* weap_json = R"({
+            "weaponConfigHash": "85de194dbb914f94",
+            "rules": [
+                {"jobId": 1, "branchId": 2, "minEffectiveLevel": 10, "mode": "dual_2h", "mainSkillMask": 64, "subSkillMask": 64}
+            ]
+        })";
+        check(st.load_weapon_config_json(weap_json), "load_weapon_config_json parses Berserker rule");
+        st.set_active_soul(cid, 1, 2, 75, true, "unit_test", 250);
+        check(st.allows_sub_weapon(6, 18000, 6, 18001), "Berserker Lv.75 allows Dual Great Axe");
+        check(st.allows_dual_2h_menu_item(6, 18001), "Berserker Sub-slot picker allows Great Axe");
+        st.set_active_soul(cid, 13, 1, 75, true, "unit_test", 260);
+        check(!st.allows_sub_weapon(6, 18000, 6, 18001), "Shinobi denied Berserker Dual Great Axe");
+
+        // 6. 0x017 [OXHUD]| and [OXMOB]| parsing + chat suppression (normal chat untouched)
+        auto build_017 = [](const char* text) {
+            std::vector<std::uint8_t> buf(24 + std::strlen(text) + 1, 0);
+            std::memcpy(buf.data() + 23, text, std::strlen(text) + 1);
+            return buf;
+        };
+        const auto p_hud = build_017("[OXHUD]|shinobi|sh=3|shmax=3|feint=1");
+        packets::on_incoming(st, 0x017, p_hud.data(), p_hud.size(), 300);
+        check(packets::should_suppress_for_game(st, 0x017, p_hud.data(), p_hud.size()), "[OXHUD]| suppressed from stock FFXI chat");
+        const HudSnapshot hud = st.hud_snapshot();
+        check(hud.soul_key == "shinobi" && hud.kv.at("sh") == "3" && hud.kv.at("feint") == "1",
+              "[OXHUD]| parsed Shinobi shadows=3 and feint=1");
+
+        const auto p_mob = build_017("[OXMOB]|17199452|1|1|");
+        packets::on_incoming(st, 0x017, p_mob.data(), p_mob.size(), 310);
+        check(packets::should_suppress_for_game(st, 0x017, p_mob.data(), p_mob.size()), "[OXMOB]| suppressed from stock FFXI chat");
+        MobStatusSnapshot mob{};
+        check(st.mob_status(17199452u, mob) && mob.payload == "1|1|", "[OXMOB]| tracked mob 17199452");
+
+        const auto p_normal = build_017("Hello Qufim Island!");
+        packets::on_incoming(st, 0x017, p_normal.data(), p_normal.size(), 320);
+        check(!packets::should_suppress_for_game(st, 0x017, p_normal.data(), p_normal.size()),
+              "ordinary player chat is NEVER suppressed");
+
+        // 7. Zone transition clears stale session state cleanly
+        std::uint8_t pkt_00b[8]{};
+        packets::on_incoming(st, 0x00B, pkt_00b, sizeof(pkt_00b), 400);
+        check(!st.active_soul().known && st.tracked_mob_count() == 0, "0x00B zone-out resets stale Soul and mob state");
     }
 
     printf("\n%s (%d failed)\n", g_failed == 0 ? "PASS" : "FAIL", g_failed);

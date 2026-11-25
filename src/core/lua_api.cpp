@@ -76,6 +76,7 @@
 #include "raise.hpp"
 #include "registry.hpp"
 #include "settings.hpp"
+#include "soulspire/soulspire.hpp"
 #include "targetwin.hpp"
 #include "scan.hpp"
 #include "text.hpp"
@@ -3822,6 +3823,9 @@ void open(lua_State* L, Context& context)
 
     lua_ashita::push(L, context.ashita_interface, context.ashita_libs); // (lua_ashita.cpp)
     lua_setfield(L, -2, "ashita");
+
+    soulspire::push_lua_api(L); // (soulspire/lua_bridge.cpp)
+    lua_setfield(L, -2, "soulspire");
 
     lua_newtable(L);
     set_function(L, "open_url", &open_url);

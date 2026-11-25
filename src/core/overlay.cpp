@@ -91,6 +91,7 @@
 #include "screenshot.hpp"
 #include "session.hpp"
 #include "settings.hpp"
+#include "soulspire/soulspire.hpp"
 #include "text.hpp"
 #include "ui.hpp"
 #include "widgets.hpp"
@@ -1022,6 +1023,7 @@ HRESULT __stdcall present(void* device, const RECT* source, const RECT* dest, HW
         menulog::on_frame();    // while Record Stats Report runs: the game's windows, menu keys and pad buttons logged
         partymenu::on_frame();  // [client] partyfinder.findmember: Party > Find Member opens Party Finder
         hideui::on_frame();
+        soulspire::on_frame();
         discord::on_frame(); // [discord]: every 2 s while Discord is there, the character and zone for its thread
     }
     begin_gui_frame(device, desc); // addons and plugins draw with ImGui in their Present events (it's open already when

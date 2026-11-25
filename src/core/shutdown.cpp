@@ -11,6 +11,7 @@
 #include "log.hpp"
 #include "plugins.hpp"
 #include "settings.hpp"
+#include "soulspire/soulspire.hpp"
 
 namespace vanacore::shutdown {
 namespace {
@@ -31,6 +32,7 @@ void unload_everything(const wchar_t* why, bool as_game_thread)
                as_game_thread ? L"" : L" (from another thread than the game's: plugins are left as they are)");
     addons::shutdown(as_game_thread);
     plugins::shutdown(as_game_thread);
+    soulspire::shutdown();
     log::write(L"Shutdown: addons and plugins unloaded");
     clients::shutdown();  // its client file, while the folder is known
     settings::shutdown(); // the session copy of vanacore.ini, after everything that could write to it

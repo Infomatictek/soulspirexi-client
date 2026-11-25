@@ -54,6 +54,8 @@
     <ClCompile Include="..\ini.cpp" />
     <ClCompile Include="..\settings.cpp" />
     <ClCompile Include="..\..\launcher\login.cpp" />
+    <ClCompile Include="..\soulspire\state.cpp" />
+    <ClCompile Include="..\soulspire\packets.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\ini.hpp" />
@@ -61,6 +63,8 @@
     <ClInclude Include="..\log.hpp" />
     <ClInclude Include="..\..\launcher\login.hpp" />
     <ClInclude Include="..\..\shared\vanacore\tls_client.hpp" />
+    <ClInclude Include="..\soulspire\state.hpp" />
+    <ClInclude Include="..\soulspire\packets.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
