@@ -3607,22 +3607,22 @@ int window_block_mouse(lua_State* L)
     return 1;
 }
 
-// [addons] ashita.interface: the Ashita interface Ashita addons see, 4.16 (the default: CatsEyeXI's Ashita) or 4.30
+// [addons] ashita.interface: the Ashita interface Ashita addons see, 4.30 (SoulspireXI default) or 4.16
 double ashita_interface(const std::wstring& ini)
 {
     if (ini.empty())
-        return 4.16;
-    wchar_t value[32] = {};
-    GetPrivateProfileStringW(L"addons", L"ashita.interface", L"4.16", value, 32, ini.c_str());
-    const double version = std::wcstod(value, nullptr);
-    if (std::fabs(version - 4.3) < 0.001)
         return 4.30;
+    wchar_t value[32] = {};
+    GetPrivateProfileStringW(L"addons", L"ashita.interface", L"4.30", value, 32, ini.c_str());
+    const double version = std::wcstod(value, nullptr);
+    if (std::fabs(version - 4.16) < 0.001)
+        return 4.16;
     static std::wstring reported; // a value that isn't either, logged once
-    if (std::fabs(version - 4.16) >= 0.001 && reported != value) {
+    if (std::fabs(version - 4.3) >= 0.001 && reported != value) {
         reported = value;
-        log::write(L"Addons: [addons] ashita.interface=%ls isn't 4.16 or 4.30; Ashita addons see 4.16", value);
+        log::write(L"Addons: [addons] ashita.interface=%ls isn't 4.16 or 4.30; Ashita addons see 4.30", value);
     }
-    return 4.16;
+    return 4.30;
 }
 
 // [addons] ashita.libs: the Ashita addon libraries Ashita addons load, 4.30 (the default: Ashita 4.30's, which have all 4.16's

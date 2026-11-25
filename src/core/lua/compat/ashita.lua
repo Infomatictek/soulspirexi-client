@@ -71,6 +71,65 @@ do
     end
 end
 
+pcall(ffi.cdef, [[
+    typedef struct _VC_XINPUT_GAMEPAD {
+        uint16_t wButtons;
+        uint8_t  bLeftTrigger;
+        uint8_t  bRightTrigger;
+        int16_t  sThumbLX;
+        int16_t  sThumbLY;
+        int16_t  sThumbRX;
+        int16_t  sThumbRY;
+    } VC_XINPUT_GAMEPAD;
+    typedef struct _VC_XINPUT_STATE {
+        uint32_t          dwPacketNumber;
+        VC_XINPUT_GAMEPAD Gamepad;
+    } VC_XINPUT_STATE;
+    typedef struct _VC_DIJOYSTATE {
+        int32_t  lX;
+        int32_t  lY;
+        int32_t  lZ;
+        int32_t  lRx;
+        int32_t  lRy;
+        int32_t  lRz;
+        int32_t  rglSlider[2];
+        uint32_t rgdwPOV[4];
+        uint8_t  rgbButtons[32];
+    } VC_DIJOYSTATE;
+    typedef struct _VC_DIJOYSTATE2 {
+        int32_t  lX;
+        int32_t  lY;
+        int32_t  lZ;
+        int32_t  lRx;
+        int32_t  lRy;
+        int32_t  lRz;
+        int32_t  rglSlider[2];
+        uint32_t rgdwPOV[4];
+        uint8_t  rgbButtons[128];
+        int32_t  lVX;
+        int32_t  lVY;
+        int32_t  lVZ;
+        int32_t  lVRx;
+        int32_t  lVRy;
+        int32_t  lVRz;
+        int32_t  rglVSlider[2];
+        int32_t  lAX;
+        int32_t  lAY;
+        int32_t  lAZ;
+        int32_t  lARx;
+        int32_t  lARy;
+        int32_t  lARz;
+        int32_t  rglASlider[2];
+        int32_t  lFX;
+        int32_t  lFY;
+        int32_t  lFZ;
+        int32_t  lFRx;
+        int32_t  lFRy;
+        int32_t  lFRz;
+        int32_t  rglFSlider[2];
+    } VC_DIJOYSTATE2;
+]])
+
 -- Their events as VanaCore's: the event VanaCore raises, and the handler for it that calls theirs with
 -- what they expect (a table they can set `blocked` in; a scene's begin and end with whether it's on the back buffer, as
 -- the game's scenes happen). The rest (command, packet_in, packet_out, load, unload) are as they are.
@@ -78,6 +137,37 @@ local event_adapters = {
     d3d_present = function (fn) return 'present', fn end,
     d3d_beginscene = function (fn) return 'beginscene', function (back_buffer) return fn(back_buffer) end end,
     d3d_endscene = function (fn) return 'endscene', function (back_buffer) return fn(back_buffer) end end,
+    xinput_state = function (fn)
+        return 'xinput_state', function (e)
+            if type(e) == 'table' then
+                if type(e.state) == 'userdata' then
+                    local ok, ptr = pcall(ffi.cast, 'VC_XINPUT_STATE*', e.state)
+                    if ok and ptr ~= nil then e.state = ptr end
+                end
+                if type(e.state_modified) == 'userdata' then
+                    local ok, ptr = pcall(ffi.cast, 'VC_XINPUT_STATE*', e.state_modified)
+                    if ok and ptr ~= nil then e.state_modified = ptr end
+                end
+            end
+            return fn(e)
+        end
+    end,
+    dinput_state = function (fn)
+        return 'dinput_state', function (e)
+            if type(e) == 'table' then
+                local ctype = (tonumber(e.size) or 0) >= 272 and 'VC_DIJOYSTATE2*' or 'VC_DIJOYSTATE*'
+                if type(e.state) == 'userdata' then
+                    local ok, ptr = pcall(ffi.cast, ctype, e.state)
+                    if ok and ptr ~= nil then e.state = ptr end
+                end
+                if type(e.state_modified) == 'userdata' then
+                    local ok, ptr = pcall(ffi.cast, ctype, e.state_modified)
+                    if ok and ptr ~= nil then e.state_modified = ptr end
+                end
+            end
+            return fn(e)
+        end
+    end,
     mouse = function (fn)
         return 'mouse', function (message, x, y, delta, blocked)
             local e = { message = message + 0x200, x = x, y = y, delta = delta, blocked = blocked }
@@ -156,7 +246,7 @@ end
 -- Addons 2.2 (XIUI's mobdb writes '%%%%' for a '%' then, '%%' after), and VanaCore's take theirs to match.
 -- interface_version: tCrossBar takes XInput's triggers and sticks as 16-21 with it set (32-37 without, which nothing
 -- raises) and passes D3DX_DEFAULT for its icons' size; XIUI's ImGui 1.92 paths want 4.3 or later.
-local INTERFACE = (vana.ashita.interface or 4.16) > 4.2 and 4.30 or 4.16
+local INTERFACE = (vana.ashita.interface or 4.30) > 4.2 and 4.30 or 4.16
 ashita.addons_version = INTERFACE == 4.30 and 4.1 or 2.1
 ashita.interface_version = INTERFACE == 4.30 and 4.3 or 4.16
 

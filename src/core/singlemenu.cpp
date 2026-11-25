@@ -151,6 +151,8 @@ using SetStatus = void(__thiscall*)(void* window, int status, int item);
 using Check = char(__cdecl*)();
 
 bool g_on = false;       // [client] singlemenu
+bool g_force = false;    // [client] singlemenu.force (explicit override when soulspire_native.dll is loaded)
+bool g_native_conflict_logged = false;
 bool g_searched = false; // FFXiMain.dll looked at
 bool g_found = false;
 bool g_failed = false; // something wasn't as known: the game's menu is left alone from then on
@@ -737,6 +739,7 @@ bool found()
 void reload(const wchar_t* ini)
 {
     g_on = GetPrivateProfileIntW(L"client", L"singlemenu", 0, ini) != 0; // taken up by on_frame
+    g_force = GetPrivateProfileIntW(L"client", L"singlemenu.force", 0, ini) != 0;
 }
 
 void install(const wchar_t* ini)
@@ -746,6 +749,14 @@ void install(const wchar_t* ini)
 
 void on_frame()
 {
+    if (g_on && !g_force && GetModuleHandleW(L"soulspire_native.dll") != nullptr) {
+        if (!g_native_conflict_logged) {
+            g_native_conflict_logged = true;
+            log::write(L"Single main menu: disabled because soulspire_native.dll owns menuwind Button ID 16 "
+                       L"(set [client] singlemenu.force=1 only for debugging)");
+        }
+        g_on = false;
+    }
     if (g_failed || (!g_on && !g_added && !g_sheet_in))
         return;
     // every frame, one pointer: a handler the game made again (logging in) has our slots at once

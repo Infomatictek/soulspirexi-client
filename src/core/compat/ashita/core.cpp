@@ -110,9 +110,9 @@ const char* overlay_install_path()
     return path.c_str();
 }
 
-bool reads_overlays(std::string_view plugin)
+bool reads_overlays(std::string_view)
 {
-    return _stricmp(std::string(plugin).c_str(), "cexidats") == 0 || _stricmp(std::string(plugin).c_str(), "cexislots") == 0;
+    return false;
 }
 
 struct CoreImpl {

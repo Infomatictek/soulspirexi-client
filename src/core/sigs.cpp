@@ -19,8 +19,9 @@ struct Known {
     const char* name;
 };
 constexpr Known kKnown[] = {
-    {0x694E5965, 0x00BDF000, "CatsEyeXI's client, built 2025-12-26"},
-    {0x6A995428, 0x00C15000, "retail's client, built 2026-09-03"},
+    {0x694E5965, 0x00BDF000, "CatsEyeXI reference build (2025-12-26)"},
+    {0x6A995428, 0x00C15000, "retail reference build (2026-09-03)"},
+    {0x6AE818B4, 0x00C17000, "SoulspireXI target retail build (0x6AE818B4 — runtime scan active)"},
 };
 
 constexpr std::size_t kMaxLogged = 200; // an addon scanning for patterns of its own can't fill the log

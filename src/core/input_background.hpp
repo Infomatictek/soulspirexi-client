@@ -13,7 +13,8 @@
 // The switch is FFXiMain's byte, found where the game's own code keeps it: FUN_10005600 in the 2025-12-26 client puts it
 // aside (0) while the game's gamepad config tool runs from the game, and back when the tool closes. Its bytes are checked
 // first; with another client only the game's own handling is left.
-constexpr DWORD kSwitchCodeAt = 0x5600;
+// Located by runtime byte-pattern scan in FFXiMain.dll (fail-closed if unmatched) instead of a fixed RVA.
+constexpr char kSwitchCodePattern[] = "8A 44 24 04 33 D2 3A C2 A0";
 constexpr BYTE kSwitchCodeHead[] = {0x8A, 0x44, 0x24, 0x04, 0x33, 0xD2, 0x3A, 0xC2, 0xA0};
 
 struct InactiveSwitch {
@@ -44,10 +45,14 @@ bool in_image(const volatile BYTE* address, std::uintptr_t base, std::size_t siz
 // decrypts itself and only then has its addresses moved to where it's loaded, so a read in between (PlayOnline's thread
 // reads the controller while the game loads) finds the code but addresses at its preferred base, 0x10000000, which
 // PlayOnline's PolHook.dll can have taken: the DLL loaded elsewhere, nothing was there and the game crashed at start.
-int read_switch_code(const BYTE* game, InactiveSwitch& out)
+int read_switch_code(HMODULE module, InactiveSwitch& out)
 {
+    const auto* game = reinterpret_cast<const BYTE*>(module);
+    const std::uintptr_t site = scan::find(module, kSwitchCodePattern);
+    if (site == 0)
+        return 2;
     __try {
-        const BYTE* code = game + kSwitchCodeAt;
+        const BYTE* code = reinterpret_cast<const BYTE*>(site);
         if (std::memcmp(code, kSwitchCodeHead, sizeof kSwitchCodeHead) != 0 || code[0x51] != 0xC2 || code[0x52] != 0x04)
             return 2;
         InactiveSwitch found;
@@ -85,7 +90,7 @@ const InactiveSwitch& inactive_switch()
     static InactiveSwitch found;
     static std::atomic<int> state{0}; // 0 not looked for (or not yet), 1 found, 2 not this client's
     if (state.load(std::memory_order_acquire) == 0) {
-        const auto* game = reinterpret_cast<const BYTE*>(GetModuleHandleW(L"FFXiMain.dll"));
+        const HMODULE game = GetModuleHandleW(L"FFXiMain.dll");
         if (game == nullptr)
             return found;
         InactiveSwitch read;

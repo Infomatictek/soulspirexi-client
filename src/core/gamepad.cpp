@@ -455,6 +455,7 @@ void on_dinput_state(void* device, DWORD size, void* state_data)
     if (state_data == nullptr || (size != sizeof(DIJOYSTATE) && size != sizeof(DIJOYSTATE2)))
         return;
     plugins::on_controller_state(device, size, state_data);
+    addons::on_dinput_state(device, size, state_data);
     auto* bytes = static_cast<std::uint8_t*>(state_data);
     const DWORD buttons = size == sizeof(DIJOYSTATE) ? 32 : 128;
     const DWORD end = kButtons + buttons;

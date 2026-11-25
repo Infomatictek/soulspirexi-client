@@ -64,6 +64,8 @@ bool wants_gamepad();
 bool on_gamepad_button(bool xinput, std::uint32_t& button, std::int32_t& value, bool blocked, bool injected);
 // Each XInputGetState read: addons' 'xinput_state' (e.user, e.state: the XINPUT_STATE, changed in place)
 void on_xinput_state(std::uint32_t user, void* state);
+// Each DirectInput GetDeviceState read: addons' 'dinput_state' (e.device, e.size, e.state, e.state_modified)
+void on_dinput_state(void* device, DWORD size, void* state);
 
 // The game's DirectInput keyboard: each state read (addons' 'key_state': e.data, the 256 keys; e.data_raw, where they
 // are, to change; e.size) and each buffered key event ('key_data': e.key, e.down, e.blocked, e.injected; true:

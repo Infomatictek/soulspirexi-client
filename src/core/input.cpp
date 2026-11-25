@@ -30,6 +30,7 @@
 #include "outline.hpp"
 #include "plugins.hpp"
 #include "registry.hpp"
+#include "scan.hpp"
 #include "ui.hpp"
 #include "window.hpp"
 
@@ -148,14 +149,9 @@ BOOL CALLBACK record_search(LPCDIDEVICEINSTANCEA device, LPVOID context)
     return DIENUM_CONTINUE;
 }
 
-// FFXiMain's "is this DirectInput controller an XInput one" (FUN_10008990 in the 2025-12-26 client: Microsoft's
-// IsXInputDevice sample, a WMI query over every PnP device), which the search callback (FUN_100057d0) runs for each
-// controller listed while the XInput switch is on. Its answer for a product is kept: it runs once per product.
-// __cdecl, the product GUID (DIDEVICEINSTANCE::guidProduct). Checked by its first bytes and both calls to it.
-constexpr DWORD kIsXInputAt = 0x8990;
-constexpr BYTE kIsXInputHead[] = {0x81, 0xEC, 0x84, 0x00, 0x00, 0x00, 0x53, 0x55, 0x56, 0x57, 0x33, 0xDB,
-                                  0xB9, 0x13, 0x00, 0x00, 0x00};
-constexpr DWORD kIsXInputCalls[] = {0x580D, 0x587A};
+// FFXiMain's "is this DirectInput controller an XInput one" (Microsoft's IsXInputDevice sample, a WMI query
+// over every PnP device). Located via runtime byte-pattern scan (fail-closed if unmatched) instead of a fixed RVA.
+constexpr char kIsXInputPattern[] = "81 EC 84 00 00 00 53 55 56 57 33 DB B9 13 00 00 00";
 constexpr size_t kIsXInputPrologue = 6; // SUB ESP,0x84
 using IsXInputFn = BOOL(__cdecl*)(const GUID*);
 IsXInputFn g_is_xinput = nullptr; // the game's, through the trampoline
@@ -179,37 +175,22 @@ BOOL __cdecl is_xinput_device(const GUID* product)
     return answer;
 }
 
-bool is_xinput_code_known(const BYTE* game)
-{
-    __try {
-        if (std::memcmp(game + kIsXInputAt, kIsXInputHead, sizeof kIsXInputHead) != 0)
-            return false;
-        for (const DWORD call : kIsXInputCalls) {
-            LONG offset = 0;
-            std::memcpy(&offset, game + call + 1, sizeof offset);
-            if (game[call] != 0xE8 || game + call + 5 + offset != game + kIsXInputAt)
-                return false;
-        }
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
 // From the game's first controller search, on its thread: nothing runs the check meanwhile.
 void hook_is_xinput()
 {
-    BYTE* game = reinterpret_cast<BYTE*>(GetModuleHandleW(L"FFXiMain.dll"));
-    if (game == nullptr || !is_xinput_code_known(game)) {
-        log::write(L"Input: this client's XInput check isn't the one VanaCore knows; each controller search still asks WMI");
+    const HMODULE game = GetModuleHandleW(L"FFXiMain.dll");
+    const std::uintptr_t site = game != nullptr ? scan::find(game, kIsXInputPattern) : 0;
+    if (site == 0) {
+        log::write(L"Input: this client's XInput check pattern wasn't found; each controller search still asks WMI");
         return;
     }
-    if (!imports::detour(reinterpret_cast<IsXInputFn>(game + kIsXInputAt), kIsXInputPrologue, &is_xinput_device,
+    if (!imports::detour(reinterpret_cast<IsXInputFn>(site), kIsXInputPrologue, &is_xinput_device,
                          g_is_xinput)) {
         log::write(L"Input: the game's XInput check couldn't be hooked; each controller search still asks WMI");
         return;
     }
-    log::write(L"Input: the game's XInput check (a slow WMI query) runs once per controller product");
+    log::write(L"Input: the game's XInput check (a slow WMI query) runs once per controller product (+0x%X)",
+               static_cast<unsigned>(site - reinterpret_cast<std::uintptr_t>(game)));
 }
 
 HRESULT STDMETHODCALLTYPE enum_devices(IDirectInput8A* self, DWORD type, LPDIENUMDEVICESCALLBACKA callback,
@@ -1589,10 +1570,10 @@ bool call_set_pad_guid(const BYTE* code, const DWORD (&parts)[4])
     }
 }
 
-// The game's other pad setters (FFXiMain, the 2025-12-26 client; FUN_10002840 calls them with padmode000, padsin000 and
-// padexsin000): none needs the pad object. Each takes the registry value's text (comma separated numbers, strtok'd in
-// place: a writable buffer) and its length; stdcall. The mode one has a third argument, 0 = "changed while playing" (it
-// raises the same pad-changed flag as the GUID's). Checked by their first four bytes and their RET.
+// The game's other pad setters (padmode000, padsin000, padexsin000). Checked strictly against the
+// audited 2025-12-26 PE header before ever probing fixed RVAs, plus full prologue & RET validation,
+// so newer retail FFXiMain.dll builds (such as 0x6AE818B4) fail closed cleanly rather than invoking
+// unverified fixed RVAs.
 struct PadSetter {
     DWORD rva;
     BYTE head[4];
@@ -1603,8 +1584,24 @@ constexpr PadSetter kModeSetter = {0x5490, {0x83, 0xEC, 0x20, 0xA0}, 0x106, 0x0C
 constexpr PadSetter kButtonsSetter = {0x5130, {0x8B, 0x54, 0x24, 0x04}, 0x1ED, 0x08};
 constexpr PadSetter kButtonsExSetter = {0x5320, {0x8B, 0x54, 0x24, 0x04}, 0x162, 0x08};
 
-bool pad_setter_known(const BYTE* code, const PadSetter& setter)
+bool is_fixed_rva_pad_build(HMODULE game)
 {
+    if (game == nullptr)
+        return false;
+    __try {
+        const auto* base = reinterpret_cast<const BYTE*>(game);
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+        return nt->FileHeader.TimeDateStamp == 0x694E5965u && nt->OptionalHeader.SizeOfImage == 0x00BDF000u;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool pad_setter_known(HMODULE game, const BYTE* code, const PadSetter& setter)
+{
+    if (!is_fixed_rva_pad_build(game))
+        return false;
     __try {
         return std::memcmp(code, setter.head, sizeof setter.head) == 0 && code[setter.ret_at] == 0xC2 &&
                code[setter.ret_at + 1] == setter.ret && code[setter.ret_at + 2] == 0x00;
@@ -1673,8 +1670,9 @@ bool select_gamepad(const std::string& text, std::string& why)
         why = "the game's module isn't loaded";
         return false;
     }
-    const BYTE* code = reinterpret_cast<const BYTE*>(game) + 0x55A0; // 0x100055A0 in the unpacked client
-    if (!pad_code_known(code)) {
+    const std::uintptr_t site = scan::find(game, "56 57 B9 04 00 00 00 8D 7C 24 0C BE");
+    const BYTE* code = reinterpret_cast<const BYTE*>(site);
+    if (site == 0 || !pad_code_known(code)) {
         why = "this client's pad code isn't the one it was written for";
         return false;
     }
@@ -1704,8 +1702,8 @@ bool apply_gamepad(const GamepadSettings& settings, std::string& why)
     const BYTE* buttons_code = base + kButtonsSetter.rva;
     const BYTE* buttons_ex_code = base + kButtonsExSetter.rva;
     // all checked before any is called: the client either is the one these were found in, or nothing changes
-    if (!pad_setter_known(mode_code, kModeSetter) || !pad_setter_known(buttons_code, kButtonsSetter) ||
-        !pad_setter_known(buttons_ex_code, kButtonsExSetter)) {
+    if (!pad_setter_known(game, mode_code, kModeSetter) || !pad_setter_known(game, buttons_code, kButtonsSetter) ||
+        !pad_setter_known(game, buttons_ex_code, kButtonsExSetter)) {
         why = "this client's pad code isn't the one it was written for";
         return false;
     }
@@ -1766,7 +1764,7 @@ GameGamepad game_gamepad()
     if (game == nullptr)
         return out;
     const BYTE* code = reinterpret_cast<const BYTE*>(game) + kModeSetter.rva;
-    if (pad_setter_known(code, kModeSetter))
+    if (pad_setter_known(game, code, kModeSetter))
         out.known = read_pad_switches(game, code, out.on, out.xinput);
     return out;
 }

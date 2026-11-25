@@ -402,7 +402,7 @@ void command(const std::vector<std::string>& parts)
             load(name, kind);
         } else if (action == "unload") {
             if (addons::required(lower(name), true)) {
-                say(lower(name) + " is required by CatsEyeXI and stays loaded (/plugin reload " + lower(name) + " reloads it)");
+                say(lower(name) + " is required by SoulspireXI and stays loaded (/plugin reload " + lower(name) + " reloads it)");
                 continue;
             }
             unload(name);

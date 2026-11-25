@@ -1,7 +1,8 @@
-# VanaCore licensing
+# SoulspireXI Client Licensing (Based on VanaCore)
 
-VanaCore
-Copyright (C) 2026 Vekien
+SoulspireXI Client (based on VanaCore)
+Original upstream VanaCore: Copyright (C) 2026 Vekien (https://github.com/CatsAndBoats/VanaCore)
+SoulspireXI modifications: Copyright (C) 2026 SoulspireXI (https://github.com/Infomatictek/soulspirexi-client)
 
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public
 License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later
@@ -99,4 +100,10 @@ by any of them, and includes none of the game's files: a player needs their own 
 
 ## Source code
 
-VanaCore's source code, for every release, is at https://github.com/CatsAndBoats/VanaCore.
+Corresponding Source for SoulspireXI Client (based on VanaCore), for every release, is at:
+- https://github.com/Infomatictek/soulspirexi-client
+
+Upstream VanaCore source code (audited base commit `04545ec52120c2df527ac3c0c4ab32392cfc10c5`) is at:
+- https://github.com/CatsAndBoats/VanaCore
+
+In compliance with Section 7 Term 4 above, all original Vekien logo images (`assets/logo*.png`, `addons/vanacore/vana/logo.png`, and `src/launcher/VanaCore.ico`) have been replaced with SoulspireXI artwork, and this modified client identifies itself as SoulspireXI Client (based on VanaCore) rather than official VanaCore.

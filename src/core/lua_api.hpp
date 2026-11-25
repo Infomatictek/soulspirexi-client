@@ -19,7 +19,7 @@ struct Context {
     std::string install;      // VanaCore's folder, with a trailing backslash (ANSI)
     std::wstring settings_ini; // vanacore.ini
     int imgui_numbers = 0;     // whose numbers its ImGui calls pass: 181 (it loaded Ashita 4.16's libs\imgui.lua), 192, 0 not known yet
-    double ashita_interface = 4.16; // the Ashita interface an Ashita addon sees ([addons] ashita.interface): 4.16 or 4.30
+    double ashita_interface = 4.30; // the Ashita interface an Ashita addon sees ([addons] ashita.interface): 4.30 (default) or 4.16
     double ashita_libs = 4.30;      // the Ashita libraries it loads ([addons] ashita.libs): 4.30 (the default: 4.30's, with ImGui 1.81's names over them) or 4.16
 };
 

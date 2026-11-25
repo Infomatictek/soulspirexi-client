@@ -110,7 +110,7 @@ std::mutex g_errors_lock; // an addon's list of them (report writes it, the stat
 // The events VanaCore raises; addons can listen for others, which never fire (yet).
 constexpr const char* kEvents[] = {"load",          "unload",        "command",  "present",  "mouse",
                                    "key",           "packet_in",     "packet_out", "text_in", "text_out",
-                                   "xinput_button", "dinput_button", "xinput_state", "key_state", "key_data", "plugin_event",
+                                   "xinput_button", "dinput_button", "xinput_state", "dinput_state", "key_state", "key_data", "plugin_event",
                                    "unhandled",     "ipc",           "d3d_dp",   "d3d_dpup", "d3d_dip",  "d3d_dipup",
                                    "beginscene",    "endscene",      "gameui_button", "gameui_replaced", "gameui_trigger",
                                    "gameui_window"};
@@ -308,7 +308,7 @@ int native_subscribe(lua_State* L)
         if (Addon* addon = owner(L))
             addon->text = true;
     if (std::strcmp(event, "xinput_button") == 0 || std::strcmp(event, "dinput_button") == 0 ||
-        std::strcmp(event, "xinput_state") == 0)
+        std::strcmp(event, "xinput_state") == 0 || std::strcmp(event, "dinput_state") == 0)
         if (Addon* addon = owner(L))
             addon->gamepad = true;
     if (std::strcmp(event, "key_state") == 0 || std::strcmp(event, "key_data") == 0)
@@ -1189,7 +1189,7 @@ void persist_boot(const std::string& name, bool on, bool plugin = false)
 bool stays_as_is(const std::string& action, const std::string& name, bool loaded, bool typed)
 {
     if (action == "unload" && is_required(name, false)) {
-        say(name + " is required by CatsEyeXI and stays loaded (/addon reload " + name + " reloads it)");
+        say(name + " is required by SoulspireXI and stays loaded (/addon reload " + name + " reloads it)");
         return true;
     }
     if (action == "unload" && is_always_on(name)) {
@@ -1330,13 +1330,10 @@ bool run_line(std::string_view line);
 // login: with those patched after it, custom items end up in the caches again at every login), and addons wait.
 enum class Lines { All, Plugins, Rest };
 
-// CatsEyeXI's required extensions, the only ones forced on: the plugins that patch the client for its custom items
-// (cexidats, cexislots) and the addon that colours its messages (customcolors). scripts\boot.txt loads them first,
-// whatever its order, and loads them even when it doesn't name them (the launcher keeps them in it; the log says so);
-// /plugin unload and /addon unload leave them alone (reload works), and the /vana Addons tab shows them without a switch
-// (vana.lua's `fixed`). Every other addon can be switched off and stays off.
-constexpr const char* kRequiredPlugins[] = {"cexidats", "cexislots"};
-constexpr const char* kRequiredAddons[] = {"customcolors"};
+// Server-required extensions forced on at boot. SoulspireXI leaves this empty so Phase 1 minimal-login testing
+// and progressive certification control plugin/addon loading explicitly via scripts\boot.txt.
+constexpr std::initializer_list<const char*> kRequiredPlugins = {};
+constexpr std::initializer_list<const char*> kRequiredAddons = {};
 
 bool is_required(std::string_view name, bool plugin)
 {
@@ -1407,14 +1404,14 @@ void required_first(size_t from, ULONGLONG at, Lines which)
     if (which != Lines::Rest)
         for (const char* name : kRequiredPlugins)
             if (std::find(seen.begin(), seen.end(), name) == seen.end() && plugins::present(name)) {
-                log::write(L"Addons: scripts\\boot.txt doesn't load %hs, which CatsEyeXI requires: it's loaded first", name);
+                log::write(L"Addons: scripts\\boot.txt doesn't load %hs, which SoulspireXI requires: it's loaded first", name);
                 first.emplace_back(required_rank(name), std::string("/plugin load ") + name);
             }
     if (which != Lines::Plugins)
         for (const char* name : kRequiredAddons) {
             std::string display;
             if (std::find(seen.begin(), seen.end(), name) == seen.end() && locate(name, nullptr, display) != nullptr) {
-                log::write(L"Addons: scripts\\boot.txt doesn't load %hs, which CatsEyeXI requires: it's loaded first", name);
+                log::write(L"Addons: scripts\\boot.txt doesn't load %hs, which SoulspireXI requires: it's loaded first", name);
                 first.emplace_back(required_rank(name), std::string("/addon load ") + name);
             }
         }
@@ -3307,6 +3304,25 @@ void on_xinput_state(std::uint32_t user, void* state)
         [&](lua_State* L) {
             lua_pushinteger(L, user);
             lua_setfield(L, -2, "user");
+            lua_pushlightuserdata(L, state);
+            lua_setfield(L, -2, "state");
+            lua_pushlightuserdata(L, state);
+            lua_setfield(L, -2, "state_modified");
+        },
+        [](lua_State*) {}, false);
+}
+
+void on_dinput_state(void* device, DWORD size, void* state)
+{
+    if (state == nullptr || !wants_gamepad())
+        return;
+    raise_table(
+        "dinput_state", [](const Addon& addon) { return addon.gamepad; },
+        [&](lua_State* L) {
+            lua_pushlightuserdata(L, device);
+            lua_setfield(L, -2, "device");
+            lua_pushinteger(L, size);
+            lua_setfield(L, -2, "size");
             lua_pushlightuserdata(L, state);
             lua_setfield(L, -2, "state");
             lua_pushlightuserdata(L, state);
