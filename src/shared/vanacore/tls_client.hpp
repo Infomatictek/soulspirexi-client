@@ -11,10 +11,11 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 
+#include <wincrypt.h>
+#include <subauth.h>
 #include <bcrypt.h>
 #include <schannel.h>
 #include <security.h>
-#include <wincrypt.h>
 
 #include <algorithm>
 #include <array>
