@@ -445,14 +445,40 @@ int main()
         check(row16.size() <= 16 && row16.find(": Ni") != std::string::npos,
               "compact_action_row_name preserves ': Ni' tier suffix within 16 chars");
 
-        // 4. Visibility rules by effective level
-        VisibilityRecord vis_show{13, 1, ActionKind::Spell, 339, 37, VisibilityRuleAction::Show};
-        VisibilityRecord vis_hide{13, 1, ActionKind::Spell, 338, 1, VisibilityRuleAction::Hide};
-        check(st.replace_visibility({vis_show, vis_hide}) == 2, "replace_visibility stores rules");
-        check(st.decide_visibility(ActionKind::Spell, 339, 75) == VisibilityDecision::Show, "Shadow Squadron: Ni shown at Lv.75");
+        // 4. Level-gated visibility at Lv.10/30/50/75 for Spells AND Abilities (preserving unmanaged vanilla fail-open)
+        VisibilityRecord vis_ss_ichi{13, 1, ActionKind::Spell, 338, 12, VisibilityRuleAction::Show};
+        VisibilityRecord vis_ss_ni{13, 1, ActionKind::Spell, 339, 37, VisibilityRuleAction::Show};
+        VisibilityRecord vis_ss_san{13, 1, ActionKind::Spell, 340, 75, VisibilityRuleAction::Show};
+        VisibilityRecord vis_ja_lvl30{13, 1, ActionKind::Ability, 610, 30, VisibilityRuleAction::Show};
+        VisibilityRecord vis_ja_lvl50{13, 1, ActionKind::Ability, 611, 50, VisibilityRuleAction::Show};
+        VisibilityRecord vis_ja_hide{13, 1, ActionKind::Ability, 612, 1, VisibilityRuleAction::Hide};
+        check(st.replace_visibility({vis_ss_ichi, vis_ss_ni, vis_ss_san, vis_ja_lvl30, vis_ja_lvl50, vis_ja_hide}) == 6,
+              "replace_visibility stores Lv.10/30/50/75 spell & ability rules");
+
+        // Lv.10: all three Shadow Squadron tiers and Lv.30/50 JAs hidden; unmanaged vanilla spells stay Unmanaged (fail-open)
+        check(st.decide_visibility(ActionKind::Spell, 338, 10) == VisibilityDecision::Hide, "Shadow Squadron: Ichi hidden at Lv.10");
         check(st.decide_visibility(ActionKind::Spell, 339, 10) == VisibilityDecision::Hide, "Shadow Squadron: Ni hidden at Lv.10");
-        check(st.decide_visibility(ActionKind::Spell, 338, 75) == VisibilityDecision::Hide, "hidden spell suppressed");
-        check(st.decide_visibility(ActionKind::Spell, 999, 75) == VisibilityDecision::Unmanaged, "unspecified spell remains unmanaged");
+        check(st.decide_visibility(ActionKind::Ability, 610, 10) == VisibilityDecision::Hide, "Lv.30 ability hidden at Lv.10");
+        check(st.decide_visibility(ActionKind::Spell, 320, 10) == VisibilityDecision::Unmanaged, "unmanaged vanilla spell remains fail-open at Lv.10");
+        // Lv.30: Ichi & Lv.30 JA unlocked; Ni/San/Lv.50 JA still hidden
+        check(st.decide_visibility(ActionKind::Spell, 338, 30) == VisibilityDecision::Show, "Shadow Squadron: Ichi shown at Lv.30");
+        check(st.decide_visibility(ActionKind::Spell, 339, 30) == VisibilityDecision::Hide, "Shadow Squadron: Ni hidden at Lv.30");
+        check(st.decide_visibility(ActionKind::Ability, 610, 30) == VisibilityDecision::Show, "Lv.30 ability shown at Lv.30");
+        check(st.decide_visibility(ActionKind::Ability, 611, 30) == VisibilityDecision::Hide, "Lv.50 ability hidden at Lv.30");
+        // Lv.50: Ichi, Ni & Lv.50 JA unlocked; San still hidden
+        check(st.decide_visibility(ActionKind::Spell, 339, 50) == VisibilityDecision::Show, "Shadow Squadron: Ni shown at Lv.50");
+        check(st.decide_visibility(ActionKind::Spell, 340, 50) == VisibilityDecision::Hide, "Shadow Squadron: San hidden at Lv.50");
+        check(st.decide_visibility(ActionKind::Ability, 611, 50) == VisibilityDecision::Show, "Lv.50 ability shown at Lv.50");
+        // Lv.75: all unlocked except explicit Hide rule; unmanaged vanilla remains Unmanaged
+        check(st.decide_visibility(ActionKind::Spell, 340, 75) == VisibilityDecision::Show, "Shadow Squadron: San shown at Lv.75");
+        check(st.decide_visibility(ActionKind::Ability, 612, 75) == VisibilityDecision::Hide, "explicitly hidden ability suppressed at Lv.75");
+        check(st.decide_visibility(ActionKind::Ability, 999, 75) == VisibilityDecision::Unmanaged, "unmanaged vanilla ability remains fail-open");
+
+        // 4b. Action search & HelpWind description formatting
+        const auto search_hits = st.search_actions("squadron");
+        check(search_hits.size() == 1 && search_hits[0].action_id == 339, "search_actions matches case-insensitively");
+        const std::string fmt_desc = format_action_description(ss_ni.description, 120);
+        check(!fmt_desc.empty() && fmt_desc.size() <= 120, "format_action_description bounds HelpWind length");
 
         // 5. Weapon rules JSON (Berserker DUAL_2H Great Axe skill=6)
         const char* weap_json = R"({
@@ -491,6 +517,27 @@ int main()
         packets::on_incoming(st, 0x017, p_normal.data(), p_normal.size(), 320);
         check(!packets::should_suppress_for_game(st, 0x017, p_normal.data(), p_normal.size()),
               "ordinary player chat is NEVER suppressed");
+
+        // 6b. 0x1FC OXHD, 0x1FD OXTL, 0x1FE OXKE, [OXTAL]|, [OXBST]| & HookStatus disposition diagnostics
+        std::uint8_t pkt_1fd[12]{};
+        std::memcpy(pkt_1fd + 4, "OXTL", 4);
+        packets::on_incoming(st, 0x1FD, pkt_1fd, sizeof(pkt_1fd), 325);
+        std::uint8_t pkt_1fe[12]{};
+        std::memcpy(pkt_1fe + 4, "OXKE", 4);
+        packets::on_incoming(st, 0x1FE, pkt_1fe, sizeof(pkt_1fe), 326);
+        const auto p_tal = build_017("[OXTAL]|META|NIN|75|5|0|5|9|0|Shinobi");
+        packets::on_incoming(st, 0x017, p_tal.data(), p_tal.size(), 327);
+        check(packets::should_suppress_for_game(st, 0x017, p_tal.data(), p_tal.size()), "[OXTAL]| suppressed from chat");
+        st.set_hook_statuses({
+            {"packet_lifecycle", "packets", "vanacore_shared", "replaced", 0, true, 1, "ok"},
+            {"ability_list_filter", "visibility", "soulspire", "migrated", 0x22562Fu, true, 2, "installed"},
+        }, kCapVanaCoreNative | kCapAbilityVisibility);
+        const DiagnosticsSnapshot diag = st.diagnostics();
+        check(diag.packets_1fd == 1 && diag.packets_1fe == 1 && diag.packets_oxtal == 1 &&
+              diag.hooks_installed == 2 && diag.hooks_total == 2 &&
+              diag.hooks[1].disposition == "migrated" && (diag.capabilities & kCapAbilityVisibility) != 0 &&
+              st.all_mob_statuses().size() == 1,
+              "Phase B.2 diagnostics report packet counts, Hook #20 capability, disposition, and mob statuses");
 
         // 7. Zone transition clears stale session state cleanly
         std::uint8_t pkt_00b[8]{};

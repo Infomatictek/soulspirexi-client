@@ -261,6 +261,86 @@ int l_mob_status(lua_State* L)
     return 1;
 }
 
+int l_all_mob_statuses(lua_State* L)
+{
+    const auto list = engine().all_mob_statuses();
+    lua_newtable(L);
+    for (std::size_t i = 0; i < list.size(); ++i) {
+        const auto& snap = list[i];
+        lua_newtable(L);
+        lua_pushnumber(L, static_cast<lua_Number>(snap.server_id));
+        lua_setfield(L, -2, "server_id");
+        lua_pushlstring(L, snap.payload.data(), snap.payload.size());
+        lua_setfield(L, -2, "payload");
+        lua_pushnumber(L, static_cast<lua_Number>(snap.updated_ms));
+        lua_setfield(L, -2, "updated_ms");
+        lua_pushinteger(L, static_cast<lua_Integer>(snap.packet_count));
+        lua_setfield(L, -2, "packet_count");
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+}
+
+int l_lookup_action(lua_State* L)
+{
+    const int k = static_cast<int>(luaL_checkinteger(L, 1));
+    const auto id = static_cast<std::uint16_t>(luaL_checkinteger(L, 2));
+    if (k < 1 || k > 3) {
+        lua_pushnil(L);
+        return 1;
+    }
+    ActionRecord rec{};
+    if (!engine().lookup_action(static_cast<ActionKind>(k), id, rec)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_newtable(L);
+    lua_pushinteger(L, rec.job); lua_setfield(L, -2, "job");
+    lua_pushinteger(L, rec.branch); lua_setfield(L, -2, "branch");
+    lua_pushinteger(L, static_cast<int>(rec.kind)); lua_setfield(L, -2, "kind");
+    lua_pushinteger(L, rec.action_id); lua_setfield(L, -2, "id");
+    lua_pushlstring(L, rec.name.data(), rec.name.size()); lua_setfield(L, -2, "name");
+    lua_pushlstring(L, rec.description.data(), rec.description.size()); lua_setfield(L, -2, "description");
+    return 1;
+}
+
+int l_search_actions(lua_State* L)
+{
+    const char* q = luaL_optstring(L, 1, "");
+    const auto limit = static_cast<std::uint32_t>(luaL_optinteger(L, 2, 64));
+    const auto rows = engine().search_actions(q != nullptr ? q : "", limit);
+    lua_newtable(L);
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        const auto& rec = rows[i];
+        lua_newtable(L);
+        lua_pushinteger(L, static_cast<int>(rec.kind)); lua_setfield(L, -2, "kind");
+        lua_pushinteger(L, rec.action_id); lua_setfield(L, -2, "id");
+        lua_pushlstring(L, rec.name.data(), rec.name.size()); lua_setfield(L, -2, "name");
+        lua_pushlstring(L, rec.description.data(), rec.description.size()); lua_setfield(L, -2, "description");
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+}
+
+int l_decide_visibility(lua_State* L)
+{
+    const int k = static_cast<int>(luaL_checkinteger(L, 1));
+    const auto id = static_cast<std::uint16_t>(luaL_checkinteger(L, 2));
+    const auto lvl = static_cast<std::uint8_t>(luaL_optinteger(L, 3, 0));
+    if (k < 1 || k > 3) {
+        lua_pushstring(L, "unmanaged");
+        return 1;
+    }
+    const VisibilityDecision d = engine().decide_visibility(static_cast<ActionKind>(k), id, lvl);
+    if (d == VisibilityDecision::Show)
+        lua_pushstring(L, "show");
+    else if (d == VisibilityDecision::Hide)
+        lua_pushstring(L, "hide");
+    else
+        lua_pushstring(L, "unmanaged");
+    return 1;
+}
+
 int l_request_open_core(lua_State* L)
 {
     engine().request_open_core();
@@ -314,6 +394,7 @@ int l_diagnostics(lua_State* L)
         lua_pushlstring(L, h.id.data(), h.id.size()); lua_setfield(L, -2, "id");
         lua_pushlstring(L, h.group.data(), h.group.size()); lua_setfield(L, -2, "group");
         lua_pushlstring(L, h.owner.data(), h.owner.size()); lua_setfield(L, -2, "owner");
+        lua_pushlstring(L, h.disposition.data(), h.disposition.size()); lua_setfield(L, -2, "disposition");
         lua_pushnumber(L, static_cast<lua_Number>(h.rva)); lua_setfield(L, -2, "rva");
         lua_pushboolean(L, h.installed ? 1 : 0); lua_setfield(L, -2, "installed");
         lua_pushinteger(L, static_cast<lua_Integer>(h.hit_count)); lua_setfield(L, -2, "hit_count");
@@ -337,11 +418,15 @@ void push(lua_State* L)
     set_fn(L, "clear_identity",    &l_clear_identity);
     set_fn(L, "replace_actions",   &l_replace_actions);
     set_fn(L, "clear_actions",     &l_clear_actions);
+    set_fn(L, "lookup_action",     &l_lookup_action);
+    set_fn(L, "search_actions",    &l_search_actions);
     set_fn(L, "set_row_limit",     &l_set_row_limit);
     set_fn(L, "replace_visibility",&l_replace_visibility);
     set_fn(L, "clear_visibility",  &l_clear_visibility);
+    set_fn(L, "decide_visibility", &l_decide_visibility);
     set_fn(L, "hud",               &l_hud);
     set_fn(L, "mob_status",        &l_mob_status);
+    set_fn(L, "all_mob_statuses",  &l_all_mob_statuses);
     set_fn(L, "request_open_core", &l_request_open_core);
     set_fn(L, "consume_open_core", &l_consume_open_core);
     set_fn(L, "reload",            &l_reload);

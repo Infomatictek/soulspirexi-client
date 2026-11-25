@@ -131,7 +131,8 @@ struct MobStatusSnapshot {
 struct HookStatus {
     std::string id;
     std::string group;
-    std::string owner; // "soulspire", "vanacore_shared", "vanacore_api"
+    std::string owner;       // "soulspire", "vanacore_shared", "vanacore_api"
+    std::string disposition; // "migrated", "replaced", "retired", "pending"
     std::uint32_t rva = 0;
     bool installed = false;
     std::uint32_t hit_count = 0;
@@ -204,6 +205,7 @@ public:
     std::uint32_t action_row_limit() const noexcept { return action_row_limit_.load(std::memory_order_relaxed); }
 
     bool lookup_action(ActionKind kind, std::uint16_t action_id, ActionRecord& out) const;
+    std::vector<ActionRecord> search_actions(std::string_view query, std::uint32_t max_results = 64) const;
 
     std::uint32_t replace_visibility(std::vector<VisibilityRecord> records);
     void clear_visibility();
@@ -229,6 +231,7 @@ public:
 
     HudSnapshot hud_snapshot() const;
     bool mob_status(std::uint32_t server_id, MobStatusSnapshot& out) const;
+    std::vector<MobStatusSnapshot> all_mob_statuses() const;
     std::uint32_t tracked_mob_count() const;
 
     // Hook diagnostics & capability tracking.

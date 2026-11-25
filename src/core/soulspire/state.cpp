@@ -691,6 +691,50 @@ bool EngineState::lookup_action(ActionKind kind, std::uint16_t action_id, Action
     return true;
 }
 
+std::vector<ActionRecord> EngineState::search_actions(std::string_view query, std::uint32_t max_results) const
+{
+    std::vector<ActionRecord> out;
+    if (max_results == 0)
+        return out;
+    std::string needle;
+    needle.reserve(query.size());
+    for (unsigned char c : query)
+        needle.push_back(static_cast<char>(std::tolower(c)));
+
+    std::lock_guard lock(mutex_);
+    if (!active_.known || active_.job < 1 || active_.job > 22 || active_.branch < 1 || active_.branch > 3)
+        return out;
+    for (const auto& [key, rec] : actions_) {
+        if (rec.job != active_.job || rec.branch != active_.branch)
+            continue;
+        if (!needle.empty()) {
+            auto contains_ci = [&](std::string_view hay) {
+                if (hay.size() < needle.size())
+                    return false;
+                for (std::size_t i = 0; i + needle.size() <= hay.size(); ++i) {
+                    bool match = true;
+                    for (std::size_t j = 0; j < needle.size(); ++j) {
+                        if (std::tolower(static_cast<unsigned char>(hay[i + j])) !=
+                            static_cast<unsigned char>(needle[j])) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match)
+                        return true;
+                }
+                return false;
+            };
+            if (!contains_ci(rec.name) && !contains_ci(rec.description))
+                continue;
+        }
+        out.push_back(rec);
+        if (out.size() >= max_results)
+            break;
+    }
+    return out;
+}
+
 std::uint32_t EngineState::replace_visibility(std::vector<VisibilityRecord> records)
 {
     std::unordered_map<std::uint64_t, VisibilityRecord> next;
@@ -902,6 +946,16 @@ bool EngineState::mob_status(std::uint32_t server_id, MobStatusSnapshot& out) co
         return false;
     out = it->second;
     return true;
+}
+
+std::vector<MobStatusSnapshot> EngineState::all_mob_statuses() const
+{
+    std::lock_guard lock(mutex_);
+    std::vector<MobStatusSnapshot> out;
+    out.reserve(mobs_.size());
+    for (const auto& [id, snap] : mobs_)
+        out.push_back(snap);
+    return out;
 }
 
 std::uint32_t EngineState::tracked_mob_count() const

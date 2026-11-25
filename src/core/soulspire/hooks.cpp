@@ -30,6 +30,7 @@ constexpr char kPatAbilityDesc[]      = "E8 ?? ?? ?? ?? 8B 0D ?? ?? ?? ?? 6A 02 
 constexpr char kPatAbilityTarget[]    = "E8 ?? ?? ?? ?? 8B 0D ?? ?? ?? ?? 50 E8 ?? ?? ?? ?? 5F 5E B0 01 5B C3 90";
 constexpr char kPatAbilityIcon[]      = "E8 ?? ?? ?? ?? 83 C4 1C 85 C0 74 12 6A 00 6A 00 68 80 80 80 80 56 53 8B";
 constexpr char kPatMagicFilterCall[]  = "E8 ?? ?? ?? ?? 83 C4 04 84 C0 0F 84 C0 00 00 00 81 FE 00 02 00 00 7C 64";
+constexpr char kPatAbilityFilterCall[] = "E8 ?? ?? ?? ?? 8B 44 24 1C C7 47 58 01 00 00 00 83 F8 FF 74 08 50 8B CF";
 constexpr char kPatCanUseSpell[]      = "A1 ?? ?? ?? ?? 56 8B C8 BA 01 00 00 00 81 E1 FF 00 00 00 57 8B 7C 24 0C";
 constexpr char kPatMissingSpellBit[]  = "BD FE FF FF FF 57 E8 ?? ?? ?? ?? 83 C4 04 84 C0 75 0B 5F 5E 5D B8 FE FF";
 constexpr char kPatMenuSpellElig[]    = "E8 ?? ?? ?? ?? 83 C4 28 84 C0 75 09 5F 5E B8 02 00 00 00 5B C3 6A 00 E8";
@@ -116,6 +117,7 @@ CallPatch g_ability_desc_patch{};
 CallPatch g_ability_target_patch{};
 CallPatch g_ability_icon_patch{};
 CallPatch g_magic_filter_call_patch{};
+CallPatch g_ability_filter_call_patch{};
 CallPatch g_menu_spell_elig_patch{};
 CallPatch g_item_job_patch{};
 CallPatch g_full_job1_patch{};
@@ -130,6 +132,8 @@ std::uintptr_t g_orig_ability_desc = 0;
 std::uintptr_t g_orig_ability_target = 0;
 ActionIconFn   g_orig_ability_icon = nullptr;
 CanShowSpellFn g_orig_can_use_spell = nullptr;
+std::uintptr_t g_orig_set_list_count = 0;
+std::uint8_t** g_ability_list_slot = nullptr;
 std::uintptr_t g_orig_menu_spell_elig = 0;
 std::uintptr_t g_missing_spell_resume = 0;
 JobLookupFn    g_orig_item_job = nullptr;
@@ -317,6 +321,69 @@ std::int32_t __stdcall decide_menu_spell_elig(const std::uint8_t* spell_res) noe
         return 0;
     }
     return -1;
+}
+
+// Phase B.2 Hook #20 (ability_list_filter @ 0x22562F):
+// Compacts Ability / WeaponSkill menu rows in-place before SetListCount,
+// preserving the fail-open Unmanaged policy for vanilla actions.
+void __stdcall compact_ability_menu_rows(std::uint8_t* menu_obj, std::int32_t* count_ptr, std::int32_t* saved_sel_ptr) noexcept
+{
+    if (menu_obj == nullptr || count_ptr == nullptr || *count_ptr <= 0)
+        return;
+    if (g_ability_list_slot == nullptr)
+        return;
+    const ActiveSoul soul = engine().active_soul();
+    if (!soul.known || soul.effective_level == 0)
+        return;
+
+    std::uint8_t* list_obj = *g_ability_list_slot;
+    if (list_obj == nullptr)
+        return;
+    auto* rows = *reinterpret_cast<std::uint32_t**>(menu_obj + 0x20);
+    const std::int32_t capacity = *reinterpret_cast<const std::int32_t*>(menu_obj + 0x44);
+    if (rows == nullptr || capacity <= 0)
+        return;
+
+    const std::int32_t total_raw = *reinterpret_cast<const std::int32_t*>(list_obj + 0x1760);
+    if (total_raw <= 0 || total_raw > 0xB00)
+        return;
+    const auto* raw_ids = reinterpret_cast<const std::uint16_t*>(list_obj + 0x160);
+
+    const std::int32_t count = (*count_ptr < capacity) ? *count_ptr : capacity;
+    const std::int32_t orig_sel = (saved_sel_ptr != nullptr) ? *saved_sel_ptr : -1;
+    std::int32_t new_sel = -1;
+    std::int32_t write = 0;
+    bool hid_any = false;
+
+    for (std::int32_t i = 0; i < count; ++i) {
+        const std::uint32_t raw_idx = rows[i * 2];
+        bool hide = false;
+        if (raw_idx < static_cast<std::uint32_t>(total_raw)) {
+            const std::uint16_t ability_id = raw_ids[raw_idx];
+            if (engine().decide_visibility(kind_for_ability(ability_id), ability_id) == VisibilityDecision::Hide) {
+                hide = true;
+            }
+        }
+        if (hide) {
+            hid_any = true;
+            continue;
+        }
+        if (i == orig_sel)
+            new_sel = write;
+        if (write != i) {
+            rows[write * 2] = rows[i * 2];
+            rows[write * 2 + 1] = rows[i * 2 + 1];
+        }
+        ++write;
+    }
+
+    if (hid_any) {
+        engine().increment_hook_hit("ability_list_filter");
+        *count_ptr = write;
+        if (saved_sel_ptr != nullptr && orig_sel >= 0 && orig_sel < count) {
+            *saved_sel_ptr = new_sel;
+        }
+    }
 }
 
 const char* __cdecl hook_item_job_label(int table, int job) noexcept
@@ -513,6 +580,21 @@ __declspec(naked) void thunk_menu_spell_elig()
     }
 }
 
+__declspec(naked) void thunk_ability_list_filter()
+{
+    __asm {
+        pushad
+        lea eax, [esp + 36]
+        lea edx, [esp + 72]
+        push edx
+        push eax
+        push ecx
+        call compact_ability_menu_rows
+        popad
+        jmp dword ptr [g_orig_set_list_count]
+    }
+}
+
 // Finds a pattern starting strictly AFTER `after` inside FFXiMain.dll (for disambiguating twin sites).
 std::uintptr_t scan_in_module(HMODULE mod, const char* pattern, std::uintptr_t after = 0)
 {
@@ -546,17 +628,18 @@ void install_if_ready()
     if (GetModuleHandleW(L"soulspire_native.dll") != nullptr) {
         log::write(L"Soulspire: legacy soulspire_native.dll is loaded; skipping VanaCore-native FFXiMain hook patching to prevent double-hooking (packet & Lua state bridge remain active)");
         std::vector<HookStatus> statuses;
-        statuses.push_back({"packet_lifecycle", "packets", "vanacore_shared", 0, true, 0, "vanacore::packets integrated"});
-        statuses.push_back({"legacy_guard", "guard", "soulspire", 0, false, 0, "skipped: soulspire_native.dll loaded"});
+        statuses.push_back({"packet_lifecycle", "packets", "vanacore_shared", "replaced", 0, true, 0, "vanacore::packets integrated"});
+        statuses.push_back({"legacy_guard", "guard", "soulspire", "pending", 0, false, 0, "skipped: soulspire_native.dll loaded"});
         engine().set_hook_statuses(std::move(statuses), kCapVanaCoreNative);
         return;
     }
 
     std::vector<HookStatus> statuses;
     std::uint32_t caps = kCapVanaCoreNative;
+    g_ability_list_slot = reinterpret_cast<std::uint8_t**>(base + 0x668308u);
 
     // 1. Coordinated VanaCore-owned packet pipeline (zero competing detours on 0xDD6C0/0xDF7C0).
-    statuses.push_back({"packet_lifecycle", "packets", "vanacore_shared", 0, true, 0, "coordinated via vanacore::packets::process"});
+    statuses.push_back({"packet_lifecycle", "packets", "vanacore_shared", "replaced", 0, true, 0, "coordinated via vanacore::packets::process"});
 
     auto install_call = [&](const char* id, const char* group, std::uintptr_t at, CallPatch& patch,
                             void* repl, std::uint32_t cap_bit, auto& orig_out) {
@@ -564,6 +647,7 @@ void install_if_ready()
         st.id = id;
         st.group = group;
         st.owner = "soulspire";
+        st.disposition = "migrated";
         if (at == 0) {
             st.detail = "signature not found";
             statuses.push_back(std::move(st));
@@ -619,6 +703,7 @@ void install_if_ready()
         st.id = "can_use_spell";
         st.group = "visibility";
         st.owner = "soulspire";
+        st.disposition = "migrated";
         if (can_use_at != 0) {
             st.rva = static_cast<std::uint32_t>(can_use_at - base);
             if (imports::detour<CanShowSpellFn>(reinterpret_cast<CanShowSpellFn>(can_use_at), 5, &hook_magic_filter, g_orig_can_use_spell)) {
@@ -641,12 +726,18 @@ void install_if_ready()
                      kCapMagicVisibility, dummy_orig);
     }
 
+    // Hook #20 (Phase B.2): Ability/WeaponSkill list filter & compaction.
+    install_call("ability_list_filter", "visibility", scan::find(ffxi, kPatAbilityFilterCall),
+                 g_ability_filter_call_patch, reinterpret_cast<void*>(&thunk_ability_list_filter),
+                 kCapAbilityVisibility, g_orig_set_list_count);
+
     const std::uintptr_t missing_bit_at = scan::find(ffxi, kPatMissingSpellBit);
     {
         HookStatus st{};
         st.id = "missing_spell_bit";
         st.group = "visibility";
         st.owner = "soulspire";
+        st.disposition = "migrated";
         if (missing_bit_at != 0) {
             st.rva = static_cast<std::uint32_t>(missing_bit_at - base);
             g_missing_spell_resume = missing_bit_at + 5;
@@ -699,6 +790,7 @@ void uninstall()
     g_ability_target_patch.uninstall();
     g_ability_icon_patch.uninstall();
     g_magic_filter_call_patch.uninstall();
+    g_ability_filter_call_patch.uninstall();
     g_menu_spell_elig_patch.uninstall();
     g_item_job_patch.uninstall();
     g_full_job1_patch.uninstall();
