@@ -1,0 +1,336 @@
+name: Windows x86 MSVC Release Build
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-x86-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows-x86:
+    name: Build & Package (Release|x86 + Dlss x64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Configure Windows line endings
+        run: git config --global core.autocrlf true
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Inspect Visual Studio toolchain and solution configuration
+        id: toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere)) {
+            throw "vswhere.exe not found at $vswhere"
+          }
+          $vsPath = & $vswhere -latest -prerelease -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vsVer = & $vswhere -latest -prerelease -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
+          $msbuild = & $vswhere -latest -prerelease -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+          if (-not $msbuild) {
+            throw "MSBuild.exe with C++ x86/x64 tools not found"
+          }
+          $sln = Get-Content -LiteralPath "VanaCore.sln" -Raw
+          if ($sln -notmatch 'Release\|x86 = Release\|x86') {
+            throw "VanaCore.sln does not declare Release|x86 solution configuration"
+          }
+          $verSrc = Get-Content -LiteralPath "src/shared/vanacore/version.hpp" -Raw
+          $baseVer = [regex]::Match($verSrc, 'kVersion\[\] = L"([^"]+)"').Groups[1].Value
+          if (-not $baseVer) { $baseVer = 'unknown' }
+          $shortSha = (git rev-parse --short=10 HEAD).Trim()
+          $fullSha = (git rev-parse HEAD).Trim()
+          $msbuildVer = (& $msbuild -version -nologo | Select-Object -Last 1).Trim()
+          Write-Host "VS Path:      $vsPath"
+          Write-Host "VS Version:   $vsVer"
+          Write-Host "MSBuild:      $msbuild ($msbuildVer)"
+          Write-Host "Base Version: $baseVer"
+          Write-Host "Commit:       $fullSha"
+          "vs_path=$vsPath" >> $env:GITHUB_OUTPUT
+          "vs_version=$vsVer" >> $env:GITHUB_OUTPUT
+          "msbuild=$msbuild" >> $env:GITHUB_OUTPUT
+          "msbuild_version=$msbuildVer" >> $env:GITHUB_OUTPUT
+          "base_version=$baseVer" >> $env:GITHUB_OUTPUT
+          "short_sha=$shortSha" >> $env:GITHUB_OUTPUT
+          "full_sha=$fullSha" >> $env:GITHUB_OUTPUT
+
+      - name: Fetch and SHA-256 verify NVIDIA DLSS SDK & AMD FSR SDK dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell -NoProfile -ExecutionPolicy Bypass -File "third_party\dlss\fetch-dlss.ps1"
+          if ($LASTEXITCODE -ne 0) { throw "fetch-dlss.ps1 failed with exit code $LASTEXITCODE" }
+          powershell -NoProfile -ExecutionPolicy Bypass -File "third_party\fsr\fetch-fsr.ps1"
+          if ($LASTEXITCODE -ne 0) { throw "fetch-fsr.ps1 failed with exit code $LASTEXITCODE" }
+
+      - name: Build and stage Release|x86 package (build-release.bat)
+        shell: cmd
+        run: build-release.bat
+
+      - name: Build and run automated unit tests (VanaCore.SettingsTest)
+        id: tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msbuild = "${{ steps.toolchain.outputs.msbuild }}"
+          & $msbuild "VanaCore.sln" "-t:VanaCore_SettingsTest:Rebuild" -p:Configuration=Release -p:Platform=x86 -m -v:minimal -nologo
+          if ($LASTEXITCODE -ne 0) { throw "VanaCore.SettingsTest build failed with exit code $LASTEXITCODE" }
+          $testExe = "build\Release\VanaCore.SettingsTest.exe"
+          if (-not (Test-Path -LiteralPath $testExe)) { throw "Missing $testExe" }
+          Write-Host "Running $testExe ..."
+          & $testExe
+          if ($LASTEXITCODE -ne 0) { throw "VanaCore.SettingsTest failed with exit code $LASTEXITCODE" }
+          "settings_test=passed" >> $env:GITHUB_OUTPUT
+
+          & $msbuild "VanaCore.sln" "-t:VanaCore_GfxTest:Rebuild" -p:Configuration=Release -p:Platform=x86 -m -v:minimal -nologo
+          if ($LASTEXITCODE -ne 0) { throw "VanaCore.GfxTest build failed with exit code $LASTEXITCODE" }
+          "gfx_test_build=passed" >> $env:GITHUB_OUTPUT
+
+      - name: Stage SoulspireXI minimal runtime files if present
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = "build\package\VanaCore"
+          foreach ($extra in @('vanacore.soulspire-minimal.ini', 'README-SOULSPIRE-EXPERIMENTAL.txt', 'UPSTREAM_SYNC.md')) {
+            if (Test-Path -LiteralPath $extra) {
+              Copy-Item -LiteralPath $extra -Destination (Join-Path $stage $extra) -Force
+              Write-Host "Staged $extra"
+            }
+          }
+
+      - name: Validate package completeness and licensing notices
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = "build\package\VanaCore"
+          $required = @(
+            'VanaCore.exe',
+            'VanaCore.Core.dll',
+            'dlss\VanaCore.Dlss.exe',
+            'dlss\nvngx_dlss.dll',
+            'dlss\nvngx_dlssg.dll',
+            'dlss\amd_fidelityfx_loader_dx12.dll',
+            'dlss\amd_fidelityfx_upscaler_dx12.dll',
+            'dlss\amd_fidelityfx_framegeneration_dx12.dll',
+            'dlss\msvcp140.dll',
+            'dlss\vcruntime140.dll',
+            'dlss\vcruntime140_1.dll',
+            'LICENSE.txt',
+            'LICENSING.md',
+            'THIRD_PARTY_NOTICES.md',
+            'licenses\LICENSE-NVIDIA-DLSS.txt',
+            'licenses\LICENSE-AMD-FSR-SDK.md',
+            'vanacore.example.ini',
+            'scripts\boot.txt'
+          )
+          $missing = @()
+          foreach ($rel in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path $stage $rel))) {
+              $missing += $rel
+            }
+          }
+          if ($missing.Count -gt 0) {
+            throw "Missing required package files: $($missing -join ', ')"
+          }
+          if (Test-Path -LiteralPath (Join-Path $stage 'dlss\nvngx_dlssnr.dll')) {
+            throw "Forbidden NVIDIA DLSS 5 binary (nvngx_dlssnr.dll) found in package"
+          }
+          Write-Host "Validated $($required.Count) required package and license files."
+
+      - name: Generate dependency inventory, build provenance, SHA-256 checksums, and ZIP archives
+        id: package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = (Resolve-Path "build\package\VanaCore").Path
+          $pkgRoot = (Resolve-Path "build\package").Path
+          $shortSha = "${{ steps.toolchain.outputs.short_sha }}"
+          $fullSha = "${{ steps.toolchain.outputs.full_sha }}"
+          $baseVer = "${{ steps.toolchain.outputs.base_version }}"
+          $builtUtc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+          # 1. Dependency inventory
+          function Hash-OrNull([string]$p) {
+            if (Test-Path -LiteralPath $p) {
+              return (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+            return $null
+          }
+          $inventory = [ordered]@{
+            schema_version = "1.0"
+            generated_utc = $builtUtc
+            upstream_base = [ordered]@{
+              repository = "https://github.com/CatsAndBoats/VanaCore"
+              pinned_commit = "04545ec52120c2df527ac3c0c4ab32392cfc10c5"
+              base_version = $baseVer
+              license = "GPL-3.0-or-later with Section 7 permissions and Term 4"
+            }
+            third_party_binaries = @(
+              [ordered]@{
+                name = "NVIDIA DLSS SDK"
+                version = "310.9.1"
+                upstream_commit = "374959484e79a640feaba44c93ac8cfb0a03f5b5"
+                license = "NVIDIA RTX SDKs License (licenses/LICENSE-NVIDIA-DLSS.txt)"
+                files = @(
+                  [ordered]@{ path = "dlss/nvngx_dlss.dll"; sha256 = (Hash-OrNull (Join-Path $stage "dlss\nvngx_dlss.dll")) },
+                  [ordered]@{ path = "dlss/nvngx_dlssg.dll"; sha256 = (Hash-OrNull (Join-Path $stage "dlss\nvngx_dlssg.dll")) }
+                )
+              },
+              [ordered]@{
+                name = "AMD FidelityFX / FSR SDK"
+                version = "2.3.0"
+                upstream_commit = "60f4ea81909200d8542eca14dccb2628b763a9a3"
+                license = "MIT (licenses/LICENSE-AMD-FSR-SDK.md)"
+                files = @(
+                  [ordered]@{ path = "dlss/amd_fidelityfx_loader_dx12.dll"; sha256 = (Hash-OrNull (Join-Path $stage "dlss\amd_fidelityfx_loader_dx12.dll")) },
+                  [ordered]@{ path = "dlss/amd_fidelityfx_upscaler_dx12.dll"; sha256 = (Hash-OrNull (Join-Path $stage "dlss\amd_fidelityfx_upscaler_dx12.dll")) },
+                  [ordered]@{ path = "dlss/amd_fidelityfx_framegeneration_dx12.dll"; sha256 = (Hash-OrNull (Join-Path $stage "dlss\amd_fidelityfx_framegeneration_dx12.dll")) }
+                )
+              },
+              [ordered]@{
+                name = "Microsoft Visual C++ x64 Redistributable Runtime (for VanaCore.Dlss.exe)"
+                license = "Microsoft Visual Studio Redistributable"
+                files = @(
+                  [ordered]@{ path = "dlss/msvcp140.dll"; sha256 = (Hash-OrNull (Join-Path $stage "dlss\msvcp140.dll")) },
+                  [ordered]@{ path = "dlss/vcruntime140.dll"; sha256 = (Hash-OrNull (Join-Path $stage "dlss\vcruntime140.dll")) },
+                  [ordered]@{ path = "dlss/vcruntime140_1.dll"; sha256 = (Hash-OrNull (Join-Path $stage "dlss\vcruntime140_1.dll")) }
+                )
+              }
+            )
+            vendored_source_dependencies = @(
+              [ordered]@{ name = "LuaJIT"; path = "third_party/luajit"; license = "MIT" },
+              [ordered]@{ name = "LuaSocket"; path = "third_party/luasocket"; license = "MIT" },
+              [ordered]@{ name = "Dear ImGui"; path = "third_party/imgui"; license = "MIT" },
+              [ordered]@{ name = "stb_image (zlib decoder)"; path = "third_party/stb"; license = "MIT / Public Domain" },
+              [ordered]@{ name = "AsmJit / AsmTK"; path = "third_party/asmjit, third_party/asmtk"; license = "Zlib" },
+              [ordered]@{ name = "Ashita v4 SDK ABI/headers"; path = "third_party/ashita-sdk"; license = "LGPL-3.0-or-later / GPL-3.0-or-later" }
+            )
+          }
+          $inventoryPath = Join-Path $stage "dependency-inventory.json"
+          $inventory | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $inventoryPath -Encoding utf8
+
+          # 2. Build provenance (written before final SHA256SUMS so provenance is hashed too)
+          $provenance = [ordered]@{
+            schema_version = "1.0"
+            channel = "experimental"
+            runtime_certified = $false
+            runtime_certification_note = "CI compilation and unit tests only; Windows live runtime playtest against play.soulspirexi.com is required before promotion (DEC-002 / BLK-005)."
+            built_utc = $builtUtc
+            repository = "${{ github.repository }}"
+            ref_name = "${{ github.ref_name }}"
+            commit_sha = $fullSha
+            upstream_pinned_commit = "04545ec52120c2df527ac3c0c4ab32392cfc10c5"
+            base_version = $baseVer
+            solution = "VanaCore.sln"
+            solution_configuration = "Release|x86 (Launcher/Core/Gfx/Tests=Win32; VanaCore.Dlss=x64)"
+            toolchain = [ordered]@{
+              runner_os = "${{ runner.os }}"
+              runner_arch = "${{ runner.arch }}"
+              visual_studio_version = "${{ steps.toolchain.outputs.vs_version }}"
+              msbuild_version = "${{ steps.toolchain.outputs.msbuild_version }}"
+            }
+            github_actions = [ordered]@{
+              workflow = "${{ github.workflow }}"
+              run_id = "${{ github.run_id }}"
+              run_number = "${{ github.run_number }}"
+              run_attempt = "${{ github.run_attempt }}"
+              run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
+            automated_checks = [ordered]@{
+              dlss_fsr_sha256_verified = $true
+              settings_test = "${{ steps.tests.outputs.settings_test }}"
+              gfx_test_compile = "${{ steps.tests.outputs.gfx_test_build }}"
+              license_notices_verified = $true
+            }
+            primary_binaries = [ordered]@{
+              "VanaCore.exe" = (Hash-OrNull (Join-Path $stage "VanaCore.exe"))
+              "VanaCore.Core.dll" = (Hash-OrNull (Join-Path $stage "VanaCore.Core.dll"))
+              "dlss/VanaCore.Dlss.exe" = (Hash-OrNull (Join-Path $stage "dlss\VanaCore.Dlss.exe"))
+            }
+          }
+          $provenancePath = Join-Path $stage "build-provenance.json"
+          $provenance | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $provenancePath -Encoding utf8
+
+          # 3. Deterministic SHA256SUMS.txt covering every file in the runnable package
+          $files = Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName
+          $lines = New-Object System.Collections.Generic.List[string]
+          foreach ($f in $files) {
+            $rel = $f.FullName.Substring($stage.Length + 1).Replace('\', '/')
+            if ($rel -eq 'SHA256SUMS.txt') { continue }
+            $h = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $lines.Add("$h  $rel")
+          }
+          $sumsPath = Join-Path $stage "SHA256SUMS.txt"
+          [IO.File]::WriteAllLines($sumsPath, $lines, [Text.UTF8Encoding]::new($false))
+
+          # 4. Create distributable ZIPs + top-level checksum manifest
+          $zipName = "soulspirexi-client-experimental-$baseVer-$shortSha-win32.zip"
+          $symZipName = "soulspirexi-client-symbols-$baseVer-$shortSha-win32.zip"
+          $zipPath = Join-Path $pkgRoot $zipName
+          $symZipPath = Join-Path $pkgRoot $symZipName
+          Compress-Archive -Path $stage -DestinationPath $zipPath -Force
+          Compress-Archive -Path (Join-Path $pkgRoot "symbols") -DestinationPath $symZipPath -Force
+
+          $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $symZipHash = (Get-FileHash -LiteralPath $symZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $topSums = @(
+            "$zipHash  $zipName",
+            "$symZipHash  $symZipName"
+          )
+          [IO.File]::WriteAllLines((Join-Path $pkgRoot "ARTIFACT_SHA256SUMS.txt"), $topSums, [Text.UTF8Encoding]::new($false))
+          Copy-Item -LiteralPath $provenancePath -Destination (Join-Path $pkgRoot "build-provenance.json") -Force
+          Copy-Item -LiteralPath $inventoryPath -Destination (Join-Path $pkgRoot "dependency-inventory.json") -Force
+
+          "zip_name=$zipName" >> $env:GITHUB_OUTPUT
+          "zip_sha256=$zipHash" >> $env:GITHUB_OUTPUT
+          "sym_zip_name=$symZipName" >> $env:GITHUB_OUTPUT
+          "sym_zip_sha256=$symZipHash" >> $env:GITHUB_OUTPUT
+
+          @"
+          ## SoulspireXI Experimental Windows Client Build ($baseVer / $shortSha)
+
+          - **Channel:** Experimental (NOT runtime-certified — requires Windows live playtest against `play.soulspirexi.com`)
+          - **Solution Configuration:** `Release|x86` (`VanaCore.Launcher`, `VanaCore.Core`, `VanaCore.Gfx` = `Win32`; `VanaCore.Dlss` = `x64`)
+          - **Automated Tests:** `VanaCore.SettingsTest.exe` = `${{ steps.tests.outputs.settings_test }}`; `VanaCore.GfxTest` compile = `${{ steps.tests.outputs.gfx_test_build }}`
+          - **Runnable Package ZIP:** `$zipName` (`sha256:$zipHash`)
+          - **Debug Symbols ZIP:** `$symZipName` (`sha256:$symZipHash`)
+          - **Primary Binaries:**
+            - `VanaCore.exe`: ``$($provenance.primary_binaries['VanaCore.exe'])``
+            - `VanaCore.Core.dll`: ``$($provenance.primary_binaries['VanaCore.Core.dll'])``
+            - `dlss/VanaCore.Dlss.exe`: ``$($provenance.primary_binaries['dlss/VanaCore.Dlss.exe'])``
+          "@ >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload experimental Windows client artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: soulspirexi-client-experimental-win32-${{ steps.toolchain.outputs.short_sha }}
+          path: |
+            build/package/${{ steps.package.outputs.zip_name }}
+            build/package/ARTIFACT_SHA256SUMS.txt
+            build/package/build-provenance.json
+            build/package/dependency-inventory.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload debug symbols artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: soulspirexi-client-symbols-win32-${{ steps.toolchain.outputs.short_sha }}
+          path: |
+            build/package/${{ steps.package.outputs.sym_zip_name }}
+            build/package/ARTIFACT_SHA256SUMS.txt
+          retention-days: 14
+          if-no-files-found: error
