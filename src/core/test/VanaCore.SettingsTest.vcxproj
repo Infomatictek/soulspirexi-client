@@ -54,8 +54,12 @@
     <ClCompile Include="..\ini.cpp" />
     <ClCompile Include="..\settings.cpp" />
     <ClCompile Include="..\..\launcher\login.cpp" />
-    <ClCompile Include="..\soulspire\state.cpp" />
-    <ClCompile Include="..\soulspire\packets.cpp" />
+    <ClCompile Include="..\soulspire\state.cpp">
+      <ObjectFileName>$(IntDir)soulspire_%(Filename).obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\soulspire\packets.cpp">
+      <ObjectFileName>$(IntDir)soulspire_%(Filename).obj</ObjectFileName>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\ini.hpp" />

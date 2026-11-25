@@ -277,11 +277,21 @@ exit /b 0</Command>
     <ClCompile Include="zonebatch.cpp" />
     <ClCompile Include="occlusion.cpp" />
     <ClCompile Include="zonelines.cpp" />
-    <ClCompile Include="soulspire\state.cpp" />
-    <ClCompile Include="soulspire\packets.cpp" />
-    <ClCompile Include="soulspire\hooks.cpp" />
-    <ClCompile Include="soulspire\lua_bridge.cpp" />
-    <ClCompile Include="soulspire\soulspire.cpp" />
+    <ClCompile Include="soulspire\state.cpp">
+      <ObjectFileName>$(IntDir)soulspire_%(Filename).obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="soulspire\packets.cpp">
+      <ObjectFileName>$(IntDir)soulspire_%(Filename).obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="soulspire\hooks.cpp">
+      <ObjectFileName>$(IntDir)soulspire_%(Filename).obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="soulspire\lua_bridge.cpp">
+      <ObjectFileName>$(IntDir)soulspire_%(Filename).obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="soulspire\soulspire.cpp">
+      <ObjectFileName>$(IntDir)soulspire_%(Filename).obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="sparkles.cpp" />
     <ClCompile Include="groundmarks.cpp" />
   </ItemGroup>
