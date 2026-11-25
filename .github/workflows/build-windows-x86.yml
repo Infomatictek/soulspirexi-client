@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - '**'
+    tags:
+      - 'v*'
   pull_request:
   workflow_dispatch:
 
@@ -12,13 +14,19 @@ permissions:
 
 concurrency:
   group: windows-x86-build-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
   build-windows-x86:
     name: Build & Package (Release|x86 + Dlss x64)
     runs-on: windows-latest
     timeout-minutes: 60
+    outputs:
+      short_sha: ${{ steps.toolchain.outputs.short_sha }}
+      base_version: ${{ steps.toolchain.outputs.base_version }}
+      zip_name: ${{ steps.package.outputs.zip_name }}
+      zip_sha256: ${{ steps.package.outputs.zip_sha256 }}
+      sym_zip_name: ${{ steps.package.outputs.sym_zip_name }}
 
     steps:
       - name: Configure Windows line endings
@@ -173,6 +181,10 @@ jobs:
               throw "Security regression: VanaCore.exe accepted plaintext --password CLI argument!"
             }
             Write-Host "SoulspireXI branding, GPL Section 7 Term 4, and credential security checks passed (CLI --password exit=$($proc.ExitCode))."
+          }
+          if (Test-Path -LiteralPath 'tools\verify_soulspire_hygiene.py') {
+            python tools\verify_soulspire_hygiene.py --package-dir $stage
+            if ($LASTEXITCODE -ne 0) { throw "verify_soulspire_hygiene.py failed with exit code $LASTEXITCODE" }
           }
           Write-Host "Validated $($required.Count) required package and license files."
 
@@ -360,3 +372,39 @@ jobs:
             build/package/ARTIFACT_SHA256SUMS.txt
           retention-days: 14
           if-no-files-found: error
+
+  publish-experimental-release:
+    name: Publish Experimental GitHub Prerelease
+    needs: build-windows-x86
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified experimental Windows client artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: soulspirexi-client-experimental-win32-${{ needs.build-windows-x86.outputs.short_sha }}
+          path: release-assets
+
+      - name: Verify ZIP SHA-256 checksum before release publish (fail-closed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum -c <(grep "${{ needs.build-windows-x86.outputs.zip_name }}" ARTIFACT_SHA256SUMS.txt)
+          test -s build-provenance.json
+          test -s dependency-inventory.json
+
+      - name: Publish Experimental GitHub Prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "SoulspireXI Client Experimental ${{ github.ref_name }}"
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            release-assets/${{ needs.build-windows-x86.outputs.zip_name }}
+            release-assets/ARTIFACT_SHA256SUMS.txt
+            release-assets/build-provenance.json
+            release-assets/dependency-inventory.json
