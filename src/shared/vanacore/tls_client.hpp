@@ -3,6 +3,9 @@
 #ifndef SECURITY_WIN32
 #define SECURITY_WIN32
 #endif
+#ifndef SCHANNEL_USE_BLACKLISTS
+#define SCHANNEL_USE_BLACKLISTS
+#endif
 
 #include <winsock2.h>
 #include <ws2tcpip.h>

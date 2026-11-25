@@ -46,13 +46,6 @@ std::wstring wide(const std::string& text)
     return out;
 }
 
-std::wstring hex(unsigned long value)
-{
-    wchar_t text[16];
-    swprintf_s(text, L"0x%08lX", value);
-    return text;
-}
-
 // --- JSON: just what the login's request and reply need ------------------------------------------
 
 std::string json_string(const std::string& text)
