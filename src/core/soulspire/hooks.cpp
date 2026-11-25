@@ -26,7 +26,6 @@ constexpr char kPatMagicRowName[]     = "E8 ?? ?? ?? ?? 8B 5C 24 24 8B 74 24 28 
 constexpr char kPatMagicDesc[]        = "E8 ?? ?? ?? ?? 8B 0D ?? ?? ?? ?? 6A 02 50 E8 ?? ?? ?? ?? 8B 86 C0 00 00";
 constexpr char kPatMagicTarget[]      = "E8 ?? ?? ?? ?? 8B 0D ?? ?? ?? ?? 50 E8 ?? ?? ?? ?? 5F B0 01 5E C3 90 90";
 constexpr char kPatMagicIcon[]        = "E8 ?? ?? ?? ?? 83 C4 1C 85 C0 5D 74 12 6A 00 6A 00 68 80 80 80 80 56 53";
-constexpr char kPatAbilityRowName[]   = "E8 ?? ?? ?? ?? 8B 5C 24 24 8B 74 24 28 50 56 8D 53 12 52 E8 ?? ?? ?? ??";
 constexpr char kPatAbilityDesc[]      = "E8 ?? ?? ?? ?? 8B 0D ?? ?? ?? ?? 6A 02 50 E8 ?? ?? ?? ?? 8B 0D ?? ?? ??";
 constexpr char kPatAbilityTarget[]    = "E8 ?? ?? ?? ?? 8B 0D ?? ?? ?? ?? 50 E8 ?? ?? ?? ?? 5F 5E B0 01 5B C3 90";
 constexpr char kPatAbilityIcon[]      = "E8 ?? ?? ?? ?? 83 C4 1C 85 C0 74 12 6A 00 6A 00 68 80 80 80 80 56 53 8B";
@@ -138,8 +137,8 @@ JobLookupFn    g_orig_full_job1 = nullptr;
 JobLookupFn    g_orig_full_job2 = nullptr;
 
 // Thread-local string buffers for FFXiMain.dll UI callbacks (game thread only).
-thread_local int32_t g_tls_magic_id = -1;
-thread_local int32_t g_tls_ability_id = -1;
+thread_local std::int32_t g_tls_magic_id = -1;
+thread_local std::int32_t g_tls_ability_id = -1;
 thread_local char g_tls_name[96]{};
 thread_local char g_tls_row[96]{};
 thread_local char g_tls_desc[208]{};
@@ -148,12 +147,12 @@ thread_local char g_tls_job_full[48]{};
 
 bool g_attempted = false;
 
-ActionKind kind_for_ability(int32_t id) noexcept
+ActionKind kind_for_ability(std::int32_t id) noexcept
 {
     return (id >= 0 && id < 512) ? ActionKind::WeaponSkill : ActionKind::Ability;
 }
 
-const char* __stdcall resolve_magic_row(int32_t spell_id) noexcept
+const char* __stdcall resolve_magic_row(std::int32_t spell_id) noexcept
 {
     g_tls_magic_id = spell_id;
     if (spell_id < 0 || spell_id > 1023)
@@ -167,7 +166,7 @@ const char* __stdcall resolve_magic_row(int32_t spell_id) noexcept
     return g_tls_row;
 }
 
-const char* __stdcall resolve_magic_target(int32_t spell_id) noexcept
+const char* __stdcall resolve_magic_target(std::int32_t spell_id) noexcept
 {
     if (spell_id < 0 || spell_id > 1023)
         return nullptr;
@@ -179,7 +178,7 @@ const char* __stdcall resolve_magic_target(int32_t spell_id) noexcept
     return g_tls_name;
 }
 
-const char* __stdcall resolve_magic_desc(int32_t spell_id) noexcept
+const char* __stdcall resolve_magic_desc(std::int32_t spell_id) noexcept
 {
     if (spell_id < 0 || spell_id > 1023)
         return nullptr;
@@ -194,7 +193,7 @@ const char* __stdcall resolve_magic_desc(int32_t spell_id) noexcept
 
 void* __cdecl hook_magic_icon(std::uint32_t v1, std::uint32_t v2) noexcept
 {
-    const int32_t id = g_tls_magic_id;
+    const std::int32_t id = g_tls_magic_id;
     g_tls_magic_id = -1;
     if (id >= 0 && id <= 1023) {
         ActionRecord rec{};
@@ -209,7 +208,7 @@ void* __cdecl hook_magic_icon(std::uint32_t v1, std::uint32_t v2) noexcept
     return g_orig_magic_icon(v1, v2);
 }
 
-const char* __stdcall resolve_ability_row(int32_t ability_id) noexcept
+const char* __stdcall resolve_ability_row(std::int32_t ability_id) noexcept
 {
     g_tls_ability_id = ability_id;
     if (ability_id < 0 || ability_id > 2047)
@@ -223,7 +222,7 @@ const char* __stdcall resolve_ability_row(int32_t ability_id) noexcept
     return g_tls_row;
 }
 
-const char* __stdcall resolve_ability_target(int32_t ability_id) noexcept
+const char* __stdcall resolve_ability_target(std::int32_t ability_id) noexcept
 {
     if (ability_id < 0 || ability_id > 2047)
         return nullptr;
@@ -235,7 +234,7 @@ const char* __stdcall resolve_ability_target(int32_t ability_id) noexcept
     return g_tls_name;
 }
 
-const char* __stdcall resolve_ability_desc(int32_t ability_id) noexcept
+const char* __stdcall resolve_ability_desc(std::int32_t ability_id) noexcept
 {
     if (ability_id < 0 || ability_id > 2047)
         return nullptr;
@@ -250,7 +249,7 @@ const char* __stdcall resolve_ability_desc(int32_t ability_id) noexcept
 
 void* __cdecl hook_ability_icon(std::uint32_t v1, std::uint32_t v2) noexcept
 {
-    const int32_t id = g_tls_ability_id;
+    const std::int32_t id = g_tls_ability_id;
     g_tls_ability_id = -1;
     if (id >= 0 && id <= 2047) {
         ActionRecord rec{};
@@ -576,7 +575,12 @@ void install_if_ready()
             statuses.push_back(std::move(st));
             return false;
         }
-        orig_out = reinterpret_cast<std::remove_reference_t<decltype(orig_out)>>(patch.original_callee);
+        using TargetT = std::remove_reference_t<decltype(orig_out)>;
+        if constexpr (std::is_pointer_v<TargetT>) {
+            orig_out = reinterpret_cast<TargetT>(patch.original_callee);
+        } else {
+            orig_out = static_cast<TargetT>(patch.original_callee);
+        }
         st.installed = true;
         st.detail = "installed";
         caps |= cap_bit;
