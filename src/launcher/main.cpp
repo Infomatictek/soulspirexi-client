@@ -107,6 +107,89 @@ constexpr WORD kGrey = vanacore::kConsoleGrey;
 vanacore::LogFile g_log; // logs\vanacore.log, shared with VanaCore.Core in the game
 bool g_detached = false; // attached=0 and the game is up: VanaCore left it running
 bool g_refused = false;  // the login failed and a message box said so: nothing to wait for
+bool g_non_interactive = false; // --non-interactive or [client] non_interactive=1: no MessageBox/prompts, structured status
+std::wstring g_status_file;     // --status-file <path>: atomic JSON status/readiness output (zero secrets)
+std::wstring g_logs_dir;        // <exe_dir>\logs: reported for crash evidence collection
+bool g_mcp_enabled = false;
+int g_mcp_port = 0;
+
+std::string utf8_from_wide(const std::wstring& text)
+{
+    if (text.empty())
+        return {};
+    const int n = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+    if (n <= 0)
+        return {};
+    std::string out(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), out.data(), n, nullptr, nullptr);
+    return out;
+}
+
+std::string json_escape(const std::string& input)
+{
+    std::string out;
+    out.reserve(input.size() + 8);
+    out.push_back('"');
+    for (unsigned char c : input) {
+        switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\b': out += "\\b"; break;
+        case '\f': out += "\\f"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (c < 0x20) {
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c));
+                out += buf;
+            } else {
+                out.push_back(static_cast<char>(c));
+            }
+            break;
+        }
+    }
+    out.push_back('"');
+    return out;
+}
+
+void emit_status(const char* stage, bool ok, int exit_code, const char* error_category,
+                 const std::wstring& message, DWORD game_pid = 0)
+{
+    if (!g_non_interactive && g_status_file.empty())
+        return;
+    const std::string log_path = g_logs_dir.empty() ? std::string() : utf8_from_wide(g_logs_dir + L"\\vanacore.log");
+    const std::string crash_dir = utf8_from_wide(g_logs_dir);
+    std::string payload = "{";
+    payload += "\"schema_version\":\"vanacore-launcher-status-1.0.0\",";
+    payload += "\"stage\":" + json_escape(stage != nullptr ? stage : "unknown") + ",";
+    payload += "\"ok\":" + std::string(ok ? "true" : "false") + ",";
+    payload += "\"exit_code\":" + std::to_string(exit_code) + ",";
+    payload += "\"error_category\":" + json_escape(error_category != nullptr ? error_category : "") + ",";
+    payload += "\"message\":" + json_escape(utf8_from_wide(message)) + ",";
+    payload += "\"game_pid\":" + std::to_string(game_pid) + ",";
+    payload += "\"log_path\":" + json_escape(log_path) + ",";
+    payload += "\"crash_dumps_dir\":" + json_escape(crash_dir) + ",";
+    payload += "\"mcp_enabled\":" + std::string(g_mcp_enabled ? "true" : "false") + ",";
+    payload += "\"mcp_port\":" + std::to_string(g_mcp_port);
+    payload += "}";
+
+    if (g_non_interactive) {
+        std::fprintf(stderr, "VANACORE_STATUS: %s\n", payload.c_str());
+        std::fflush(stderr);
+    }
+    if (!g_status_file.empty()) {
+        const std::wstring tmp_path = g_status_file + L".tmp";
+        HANDLE fh = CreateFileW(tmp_path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (fh != INVALID_HANDLE_VALUE) {
+            DWORD written = 0;
+            WriteFile(fh, payload.data(), static_cast<DWORD>(payload.size()), &written, nullptr);
+            CloseHandle(fh);
+            MoveFileExW(tmp_path.c_str(), g_status_file.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+        }
+    }
+}
 
 // A line in vanacore.log only, marked as VanaCore.exe's.
 void note(const std::wstring& message)
@@ -151,19 +234,23 @@ std::wstring describe_exit(DWORD code)
     return name != nullptr ? std::wstring(text) + L" (" + name + L")" : text;
 }
 
-int fail(const std::wstring& message)
+int fail(const std::wstring& message, int code = 1, const char* category = "generic_error")
 {
     say(stderr, L"VanaCore: " + message, kRed);
-    return 1;
+    emit_status("failed", false, code, category, message);
+    return code;
 }
 
-// The login failed: said on the console and in a message box. VanaCore then closes without waiting for a key.
-int refuse(const std::wstring& message, int code)
+// The login failed: said on the console and (in interactive player mode) in a message box.
+int refuse(const std::wstring& message, int code, const char* category = "login_failed")
 {
     say(stderr, L"SoulspireXI Client: couldn't log in: " + message, kRed);
     g_refused = true;
-    const std::wstring text = message + L"\n\nPlease verify your credentials and try again.";
-    MessageBoxW(nullptr, text.c_str(), L"SoulspireXI Client", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+    emit_status("failed", false, code, category, message);
+    if (!g_non_interactive) {
+        const std::wstring text = message + L"\n\nPlease verify your credentials and try again.";
+        MessageBoxW(nullptr, text.c_str(), L"SoulspireXI Client", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+    }
     return code;
 }
 
@@ -238,6 +325,26 @@ bool has_retail_argument(int argc, wchar_t** argv)
         if (_wcsicmp(argv[i], L"--retail") == 0)
             return true;
     return false;
+}
+
+bool has_non_interactive_argument(int argc, wchar_t** argv)
+{
+    for (int i = 1; i < argc; ++i)
+        if (_wcsicmp(argv[i], L"--non-interactive") == 0)
+            return true;
+    return false;
+}
+
+std::wstring status_file_argument(int argc, wchar_t** argv, const std::wstring& dir)
+{
+    std::wstring name;
+    for (int i = 1; i + 1 < argc; ++i)
+        if (_wcsicmp(argv[i], L"--status-file") == 0)
+            name = argv[++i];
+    if (name.empty())
+        return name;
+    const bool full = (name.size() > 1 && name[1] == L':') || name.starts_with(L"\\") || name.starts_with(L"//");
+    return full ? name : dir + L"\\" + name;
 }
 
 // The server's host, for the core (BootInfo::server): --server's, else [server] server=; none for PlayOnline as installed
@@ -351,30 +458,35 @@ int log_in(int argc, wchar_t** argv, const vanacore::Settings& settings, vanacor
             user = argv[++i];
         else if (is({L"--lang"}))
             language = region(argv[++i]);
-        else if (is({L"--ini"}))
-            ++i; // the settings file: wmain's
+        else if (is({L"--ini", L"--status-file"}))
+            ++i; // launcher-only arguments
+        else if (_wcsicmp(argv[i], L"--non-interactive") == 0)
+            continue;
         else if (std::wstring(argv[i]).starts_with(L"--"))
             note(L"ignoring " + std::wstring(argv[i]) + L": SoulspireXI login doesn't use it");
     }
-    if (user.empty())
+    if (user.empty() && !g_non_interactive)
         prompt_console_line(L"SoulspireXI Username: ", false, user);
     if (password_stdin) {
         if (!read_password_stdin(password))
-            return fail(L"--password-stdin was specified, but no password could be read from stdin.");
-    } else if (password.empty()) {
+            return fail(L"--password-stdin was specified, but no password could be read from stdin.",
+                        g_non_interactive ? vanacore::kExitMissingSettings : 1, "missing_credentials");
+    } else if (password.empty() && !g_non_interactive) {
         prompt_console_line(L"SoulspireXI Password: ", true, password);
     }
     if (user.empty() || password.empty()) {
         if (!password.empty())
             SecureZeroMemory(password.data(), password.size() * sizeof(wchar_t));
         return fail(L"no username or password to log in with. Pass --user <name> with --password-stdin, or run "
-                    L"interactively in a console window to enter credentials safely.");
+                    L"interactively in a console window to enter credentials safely.",
+                    g_non_interactive ? vanacore::kExitMissingSettings : 1, "missing_credentials");
     }
 
+    emit_status("authenticating", true, 0, "", L"Logging in to " + server);
     std::wstring error;
     std::uint32_t address = 0;
     if (!vanacore::login::resolve(server, address, error))
-        return refuse(error, vanacore::kExitServerProblem);
+        return refuse(error, vanacore::kExitServerProblem, "dns_failed");
     // [server] loginversion: the version the login reports, for a server that wants another than VanaCore's
     vanacore::login::Version version = vanacore::login::kVersion;
     if (!settings.login_version.empty()) {
@@ -389,10 +501,12 @@ int log_in(int argc, wchar_t** argv, const vanacore::Settings& settings, vanacor
     const vanacore::login::Result result =
         vanacore::login::log_in(server, address, kAuthPort, user, password, version);
     SecureZeroMemory(password.data(), password.size() * sizeof(wchar_t));
-    if (result.outcome != vanacore::login::Outcome::LoggedIn)
-        return refuse(result.message, result.outcome == vanacore::login::Outcome::Refused
-                                          ? vanacore::kExitLoginRefused
-                                          : vanacore::kExitServerProblem);
+    if (result.outcome != vanacore::login::Outcome::LoggedIn) {
+        const bool is_refused = result.outcome == vanacore::login::Outcome::Refused;
+        return refuse(result.message,
+                      is_refused ? vanacore::kExitLoginRefused : vanacore::kExitServerProblem,
+                      is_refused ? "authentication_refused" : "network_or_tls_error");
+    }
     say(stdout,
         result.tls_protocol.empty() ? L"Logged in." : (L"Logged in (" + result.tls_protocol + L")."),
         kGrey);
@@ -500,11 +614,11 @@ int bootloader_target(const vanacore::Settings& settings, const std::wstring& se
 void add_passthrough(int argc, wchar_t** argv, Target& target)
 {
     for (int i = target.passthrough; i < argc; ++i) {
-        if (is_ini_argument(argv[i])) {
+        if (is_ini_argument(argv[i]) || _wcsicmp(argv[i], L"--status-file") == 0) {
             ++i; // VanaCore's own, not the target's
             continue;
         }
-        if (_wcsicmp(argv[i], L"--retail") != 0)
+        if (_wcsicmp(argv[i], L"--retail") != 0 && _wcsicmp(argv[i], L"--non-interactive") != 0)
             target.command_line += L' ' + quote(argv[i]);
     }
 }
@@ -515,23 +629,31 @@ int missing_settings(int argc, wchar_t** argv, const std::wstring& dir, const st
 {
     if (GetFileAttributesW(settings_ini.c_str()) != INVALID_FILE_ATTRIBUTES || ini_argument(argc, argv, dir).empty())
         return 0;
-    say(stderr, L"VanaCore: the settings file " + settings_ini + L" (--ini) isn't there.", kRed);
+    const std::wstring msg = L"the settings file " + settings_ini + L" (--ini) isn't there.";
+    say(stderr, L"VanaCore: " + msg, kRed);
     g_refused = true;
-    const std::wstring text = L"The settings file for this launch wasn't found:\n" + settings_ini +
-                              L"\n\nPlease check --ini or create vanacore.ini from vanacore.soulspire-minimal.ini.";
-    MessageBoxW(nullptr, text.c_str(), L"SoulspireXI Client", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
-    return vanacore::kExitGameStartFailed;
+    const int code = g_non_interactive ? vanacore::kExitMissingSettings : vanacore::kExitGameStartFailed;
+    emit_status("failed", false, code, "missing_settings", msg);
+    if (!g_non_interactive) {
+        const std::wstring text = L"The settings file for this launch wasn't found:\n" + settings_ini +
+                                  L"\n\nPlease check --ini or create vanacore.ini from vanacore.soulspire-minimal.ini.";
+        MessageBoxW(nullptr, text.c_str(), L"SoulspireXI Client", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+    }
+    return code;
 }
 
 // The program wouldn't start: said, or for one that asks for administrator rights (retail's pol.exe) asked of Windows.
 int launch_failed(std::wstring error, const std::wstring& executable)
 {
     if (error == vanacore::kElevationRequired) {
+        if (g_non_interactive)
+            return fail(executable + L" requires administrator elevation, which is blocked in --non-interactive mode.",
+                        vanacore::kExitElevationBlocked, "elevation_blocked");
         if (!is_elevated())
             return run_elevated();
         error = executable + L" asks for administrator rights, and Windows wouldn't give them to VanaCore.exe.";
     }
-    return fail(error);
+    return fail(error, g_non_interactive ? vanacore::kExitInjectionFailed : 1, "injection_failed");
 }
 
 // PlayOnline has its own windows from here, and the game is up much later (its login, then Play): nothing to wait for.
@@ -554,8 +676,13 @@ int run(int argc, wchar_t** argv, const std::wstring& settings_ini)
     if (settings_ini != dir + L"\\vanacore.ini")
         note(L"settings: " + settings_ini + L" (--ini)");
     vanacore::Settings settings = vanacore::load_settings(dir, settings_ini);
+    if (settings.non_interactive)
+        g_non_interactive = true;
+    g_mcp_enabled = GetPrivateProfileIntW(L"mcp", L"enabled", 0, settings_ini.c_str()) != 0;
+    g_mcp_port = g_mcp_enabled ? static_cast<int>(GetPrivateProfileIntW(L"mcp", L"port", 47800, settings_ini.c_str())) : 0;
     if (has_retail_argument(argc, argv))
         settings.retail = true;
+    emit_status("launching", true, 0, "", L"Settings loaded");
     Target target;
     vanacore::GameLogin login{};
     bool logged_in = false; // VanaCore's own login: the game process is VanaCore.exe again
@@ -588,12 +715,20 @@ int run(int argc, wchar_t** argv, const std::wstring& settings_ini)
     std::wstring error;
     if (!vanacore::launch_and_inject(options, process, error))
         return launch_failed(error, target.executable);
-    note(L"game process " + std::to_wstring(GetProcessId(process)) + L" started with VanaCore.Core");
+    const DWORD game_pid = GetProcessId(process);
+    note(L"game process " + std::to_wstring(game_pid) + L" started with VanaCore.Core");
+    emit_status("injected", true, 0, "", L"VanaCore.Core injected into game process", game_pid);
 
     if (target.retail && !settings.attached)
         return leave_running(process);
 
     HANDLE started = nullptr;
+    {
+        wchar_t name[64];
+        swprintf_s(name, vanacore::kGameStartedEvent, game_pid);
+        if (!settings.attached || g_non_interactive || !g_status_file.empty())
+            started = CreateEventW(nullptr, TRUE, FALSE, name);
+    }
     if (settings.attached) {
         // The game joins a job that Windows ends when VanaCore does, however VanaCore closes
         // (its window, Ctrl+C, Task Manager, a crash). The job handle is never closed by hand.
@@ -607,44 +742,62 @@ int run(int argc, wchar_t** argv, const std::wstring& settings_ini)
         else
             say(stderr, L"VanaCore: couldn't attach to the game (error " + std::to_wstring(GetLastError()) +
                             L"); closing VanaCore won't close it.", kRed);
-    } else {
-        // Detach once the game is up; until then stay, so login errors stay readable.
-        wchar_t name[64];
-        swprintf_s(name, vanacore::kGameStartedEvent, GetProcessId(process));
-        started = CreateEventW(nullptr, TRUE, FALSE, name);
     }
 
     // The bootloader shares this console, and the window has to outlive its last lines
     // (xiloader prints its errors, then "Closing...").
-    const HANDLE waits[2] = {process, started};
-    const DWORD woke = WaitForMultipleObjects(started != nullptr ? 2 : 1, waits, FALSE, INFINITE);
-    if (woke == WAIT_OBJECT_0 + 1) {
-        // Logged only: a console write blocks while the window is in selection mode (a click on it), and VanaCore.exe
-        // must exit now whatever the window is doing.
-        note(L"The game is running. VanaCore is detaching (attached=0).");
-        CloseHandle(process);
-        g_detached = true;
-        return 0;
+    bool ready_reported = false;
+    for (;;) {
+        const HANDLE waits[2] = {process, started};
+        const DWORD count = (started != nullptr && !ready_reported) ? 2 : 1;
+        const DWORD woke = WaitForMultipleObjects(count, waits, FALSE, INFINITE);
+        if (woke == WAIT_OBJECT_0 + 1) {
+            ready_reported = true;
+            emit_status("ready", true, 0, "", L"Game Direct3D device initialized", game_pid);
+            if (!settings.attached) {
+                // Logged only: a console write blocks while the window is in selection mode (a click on it), and VanaCore.exe
+                // must exit now whatever the window is doing.
+                note(L"The game is running. VanaCore is detaching (attached=0).");
+                CloseHandle(started);
+                CloseHandle(process);
+                g_detached = true;
+                return 0;
+            }
+            continue; // stay attached so Job Object lifecycle remains enforced until game closes
+        }
+        break;
     }
+    if (started != nullptr)
+        CloseHandle(started);
     DWORD code = 0;
     GetExitCodeProcess(process, &code);
     CloseHandle(process);
     // Codes from 0xC0000000 up are Windows' crash codes (access violation, ...). VanaCore then
-    // exits with 1, not the crash code, so it doesn't look like VanaCore itself crashed.
+    // exits with 1 (or kExitGameCrashed in --non-interactive mode), not the raw NTSTATUS code.
     if (code >= 0xC0000000) {
-        say(stderr, L"VanaCore: the game crashed, exit code " + describe_exit(code) + L". See logs\\vanacore.log.",
-            kRed);
-        return 1;
+        const std::wstring msg = L"the game crashed, exit code " + describe_exit(code) + L". See logs\\vanacore.log.";
+        say(stderr, L"VanaCore: " + msg, kRed);
+        const int exit_code = g_non_interactive ? vanacore::kExitGameCrashed : 1;
+        emit_status("failed", false, exit_code, "client_crash", msg, game_pid);
+        return exit_code;
     }
-    if (logged_in && code == static_cast<DWORD>(vanacore::kExitGameStartFailed))
-        say(stderr, L"VanaCore: the game couldn't start. See logs\\vanacore.log.", kRed);
-    else if (code == static_cast<DWORD>(vanacore::kExitGraphicsCardLost))
-        say(stderr, L"VanaCore: the graphics card stopped (a driver timeout), so the game closed. See logs\\vanacore.log.",
-            kRed);
-    else if (settings.attached)
+    if (logged_in && code == static_cast<DWORD>(vanacore::kExitGameStartFailed)) {
+        const std::wstring msg = L"the game couldn't start. See logs\\vanacore.log.";
+        say(stderr, L"VanaCore: " + msg, kRed);
+        emit_status("failed", false, static_cast<int>(code), "game_start_failed", msg, game_pid);
+    } else if (code == static_cast<DWORD>(vanacore::kExitGraphicsCardLost)) {
+        const std::wstring msg = L"the graphics card stopped (a driver timeout), so the game closed. See logs\\vanacore.log.";
+        say(stderr, L"VanaCore: " + msg, kRed);
+        emit_status("failed", false, static_cast<int>(code), "graphics_card_lost", msg, game_pid);
+    } else if (settings.attached) {
         say(stdout, L"The game has closed (exit code " + describe_exit(code) + L").", kGrey);
-    else
+        emit_status("exited", code == 0, static_cast<int>(code), code == 0 ? "" : "nonzero_exit",
+                    L"Game closed with exit code " + describe_exit(code), game_pid);
+    } else {
         note(L"the game exited before it was up, exit code " + describe_exit(code));
+        emit_status("exited", code == 0, static_cast<int>(code), code == 0 ? "" : "early_exit",
+                    L"Game exited before ready with code " + describe_exit(code), game_pid);
+    }
     return static_cast<int>(code);
 }
 
@@ -669,19 +822,26 @@ int wmain(int argc, wchar_t** argv)
                       L"       VanaCore.exe [bootloader arguments...]    the same through [client] bootloader=\n"
                       L"       VanaCore.exe <executable> [arguments...]  any other program, with VanaCore.Core loaded\n"
                       L"       any of them with --ini <file>             that settings file in place of vanacore.ini (from\n"
-                      L"                                                 VanaCore's folder unless a full path; it must be there)\n",
+                      L"                                                 VanaCore's folder unless a full path; it must be there)\n"
+                      L"       --non-interactive                         suppress MessageBox/console prompts and emit JSON status\n"
+                      L"       --status-file <file>                      write atomic machine-readable JSON readiness/exit status\n",
                       vanacore::kDefaultServer);
         return 2;
     }
+    const std::wstring dir = exe_dir();
+    g_non_interactive = has_non_interactive_argument(argc, argv);
+    g_status_file = status_file_argument(argc, argv, dir);
+    g_logs_dir = dir + L"\\logs";
     // the settings file: --ini's, else vanacore.ini
-    const std::wstring given = ini_argument(argc, argv, exe_dir());
-    const std::wstring settings_ini = given.empty() ? exe_dir() + L"\\vanacore.ini" : given;
+    const std::wstring given = ini_argument(argc, argv, dir);
+    const std::wstring settings_ini = given.empty() ? dir + L"\\vanacore.ini" : given;
     // [logging] enabled=0 turns logs\vanacore.log off, on by default (VanaCore.Core reads the same key).
     if (GetPrivateProfileIntW(L"logging", L"enabled", 1, settings_ini.c_str()) != 0)
-        g_log.open(exe_dir());
+        g_log.open(dir);
     SetUnhandledExceptionFilter(&on_crash);
     note(L"VanaCore v" + std::wstring(vanacore::kVersion) + L" started (process " +
-         std::to_wstring(GetCurrentProcessId()) + L")");
+         std::to_wstring(GetCurrentProcessId()) + (g_non_interactive ? L", non-interactive)" : L")"));
+    emit_status("starting", true, 0, "", L"VanaCore launcher started");
     // A click in the console window starts a text selection ("Select" in its title), which freezes every write to the
     // console until a key is pressed: VanaCore.exe would then never print or exit. Selection by click is off.
     {
@@ -696,8 +856,9 @@ int wmain(int argc, wchar_t** argv)
     // A window VanaCore owns would close now and take any error with it: wait for a key first.
     // Not after detaching: the game is running, and the window is meant to go. Not with
     // [client] autoclose=1 after a normal exit either; errors and crashes still wait.
-    const bool autoclose = vanacore::load_settings(exe_dir(), settings_ini).autoclose && result == 0;
-    if (!g_detached && !g_refused && !autoclose && owns_console_window()) {
+    // Never wait in --non-interactive mode.
+    const bool autoclose = vanacore::load_settings(dir, settings_ini).autoclose && result == 0;
+    if (!g_non_interactive && !g_detached && !g_refused && !autoclose && owns_console_window()) {
         say(stdout, L"Press any key to close this window.", kGrey);
         FlushConsoleInputBuffer(GetStdHandle(STD_INPUT_HANDLE)); // drop keys typed while playing
         _getwch();

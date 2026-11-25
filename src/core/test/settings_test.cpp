@@ -381,6 +381,13 @@ int main()
         } else if (plain_listener != INVALID_SOCKET) {
             closesocket(plain_listener);
         }
+        // Verify structured non-interactive launcher exit code constants stay distinct from legacy codes
+        check(vanacore::kExitLoginRefused == 3 && vanacore::kExitServerProblem == 4 &&
+                  vanacore::kExitGameStartFailed == 5 && vanacore::kExitGraphicsCardLost == 6,
+              "legacy launcher exit codes preserved");
+        check(vanacore::kExitMissingSettings == 10 && vanacore::kExitElevationBlocked == 11 &&
+                  vanacore::kExitInjectionFailed == 12 && vanacore::kExitGameCrashed == 15,
+              "non-interactive structured exit codes distinct and stable");
         WSACleanup();
     }
 

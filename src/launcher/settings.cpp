@@ -19,6 +19,7 @@ Settings load_settings(const std::wstring& vanacore_dir, const std::wstring& ini
         settings.bootloader = (dir / bootloader).lexically_normal().wstring();
     settings.attached = GetPrivateProfileIntW(L"client", L"attached", 0, ini.c_str()) != 0;
     settings.autoclose = GetPrivateProfileIntW(L"client", L"autoclose", 0, ini.c_str()) != 0;
+    settings.non_interactive = GetPrivateProfileIntW(L"client", L"non_interactive", 0, ini.c_str()) != 0;
     settings.retail = GetPrivateProfileIntW(L"client", L"retail", 0, ini.c_str()) != 0;
     settings.retail_region = ini_read(ini, L"client", L"retail.region");
     // Unset is FFXI's quick start button; set, even to nothing, is what it says

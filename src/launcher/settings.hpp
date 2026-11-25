@@ -17,6 +17,7 @@ struct Settings {
                              //                   VanaCore logs in itself (login.cpp)
     bool attached = false;   // [client] attached=   1: stay with the game (closing VanaCore closes it)
     bool autoclose = false;  // [client] autoclose=  1: close the window when the game exits normally
+    bool non_interactive = false; // [client] non_interactive= 1 (or --non-interactive): suppress MessageBox/prompts, emit structured status
     bool retail = false;     // [client] retail=     1: PlayOnline as installed (retail, Steam): no login, bootloader or [server];
                              //                   pol.exe from the registry (playonline.hpp) is started with VanaCore.Core in it
     std::wstring retail_region; // [client] retail.region= jp, us or eu; default: the first install the registry has

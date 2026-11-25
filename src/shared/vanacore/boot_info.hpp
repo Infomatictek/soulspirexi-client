@@ -49,7 +49,7 @@ inline constexpr wchar_t kGameHostArgument[] = L"--vanacore-game";
 // can detach (attached=0). Formatted with the game's process ID.
 inline constexpr wchar_t kGameStartedEvent[] = L"Local\\VanaCore.GameStarted.%lu";
 
-// VanaCore.exe's exit codes for a game that never started, for the CatsEyeXI launcher.
+// VanaCore.exe's exit codes for a game that never started, for SoulspireLauncher and automation.
 inline constexpr int kExitLoginRefused = 3;     // wrong username or password, banned, already logged in
 inline constexpr int kExitServerProblem = 4;    // the login server couldn't be reached, or its reply made no sense
 inline constexpr int kExitGameStartFailed = 5;  // logged in, but PlayOnline or FFXI couldn't be started
@@ -57,5 +57,11 @@ inline constexpr int kExitGameStartFailed = 5;  // logged in, but PlayOnline or 
 // The game's exit code when VanaCore closed it because the graphics card was lost (a driver timeout): nothing it drew
 // could show again (graphics::close_if_lost).
 inline constexpr int kExitGraphicsCardLost = 6;
+
+// Additional structured exit codes used when --non-interactive / [client] non_interactive=1 is enabled.
+inline constexpr int kExitMissingSettings = 10;   // --ini missing or invalid, or unsafe plaintext password config
+inline constexpr int kExitElevationBlocked = 11;  // target requires elevation (disallowed in unattended mode)
+inline constexpr int kExitInjectionFailed = 12;   // CreateProcess / LoadLibraryW / VanaCoreInstall failed
+inline constexpr int kExitGameCrashed = 15;       // game process terminated with a Windows exception (>= 0xC0000000)
 
 } // namespace vanacore

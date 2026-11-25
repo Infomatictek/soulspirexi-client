@@ -112,10 +112,19 @@ inline SECURITY_STATUS acquire_outbound_credentials(CredHandle& out_handle, bool
     if (status != SEC_E_UNSUPPORTED_FUNCTION)
         return status;
 #endif
+    // Legacy v4 fallback (e.g. Wine Schannel which rejects SCH_CREDENTIALS v5 with SEC_E_UNSUPPORTED_FUNCTION
+    // while its GnuTLS backend supports TLS 1.3 when grbitEnabledProtocols == 0). Try OS default (0) first so
+    // TLS 1.3-only login servers work under Wine, falling back to explicit TLS 1.2 only if needed.
     SCHANNEL_CRED legacy{};
     legacy.dwVersion = SCHANNEL_CRED_VERSION;
-    legacy.grbitEnabledProtocols = SP_PROT_TLS1_2_CLIENT;
+    legacy.grbitEnabledProtocols = 0;
     legacy.dwFlags = SCH_CRED_MANUAL_CRED_VALIDATION | SCH_CRED_NO_DEFAULT_CREDS | SCH_USE_STRONG_CRYPTO;
+    SECURITY_STATUS legacy_status = AcquireCredentialsHandleW(nullptr, const_cast<wchar_t*>(UNISP_NAME_W),
+                                                              SECPKG_CRED_OUTBOUND, nullptr, &legacy, nullptr, nullptr,
+                                                              &out_handle, nullptr);
+    if (legacy_status == SEC_E_OK)
+        return SEC_E_OK;
+    legacy.grbitEnabledProtocols = SP_PROT_TLS1_2_CLIENT;
     return AcquireCredentialsHandleW(nullptr, const_cast<wchar_t*>(UNISP_NAME_W), SECPKG_CRED_OUTBOUND, nullptr,
                                      &legacy, nullptr, nullptr, &out_handle, nullptr);
 }
