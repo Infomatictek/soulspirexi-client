@@ -14,6 +14,7 @@
 
 #include "../ini.hpp"
 #include "../settings.hpp"
+#include "../soulspire/input_ownership.hpp"
 #include "../soulspire/packets.hpp"
 #include "../soulspire/state.hpp"
 #include "../../launcher/login.hpp"
@@ -544,10 +545,44 @@ int main()
         check(st.consume_open_core() == 1 && st.consume_open_core() == 0,
               "request_open_core / consume_open_core atomically delivers menu activation");
 
-        // 7. Zone transition clears stale session state cleanly
+        // 7. Zone transition clears stale session state cleanly & releases UI input ownership
+        InputOwnershipState& io = input_ownership();
+        io.release_all("test_reset", 350);
+        const UiInputTransition acq = io.acquire("soulspire_core", {true, true, true, 1500}, 360);
+        check(acq.became_active && acq.active && acq.block_mouse && acq.capture_gamepad && acq.show_cursor,
+              "acquire_ui_input transitions Gameplay -> UiActive with cursor visible");
+        check(io.wants_visible_cursor() && io.snapshot().owner_count == 1,
+              "active UI input owner requests single visible cursor");
+
         std::uint8_t pkt_00b[8]{};
         packets::on_incoming(st, 0x00B, pkt_00b, sizeof(pkt_00b), 400);
         check(!st.active_soul().known && st.tracked_mob_count() == 0, "0x00B zone-out resets stale Soul and mob state");
+        check(!io.active() && !io.wants_visible_cursor() && io.snapshot().last_release_reason == "zone_out",
+              "0x00B zone-out releases UI input ownership and restores gameplay cursor");
+
+        // 8. Focus loss (Alt-Tab) and lease expiry auto-release UI input ownership
+        io.acquire("soulspire_core", {true, true, true, 1000}, 500);
+        const UiInputTransition bg = io.tick(550, true);
+        check(bg.became_inactive && !bg.active && io.snapshot().last_release_reason == "focus_loss",
+              "window focus loss (Alt-Tab) automatically releases UI input ownership");
+
+        io.acquire("soulspire_core", {true, true, true, 500}, 600);
+        const UiInputTransition exp = io.tick(1200, false);
+        check(exp.became_inactive && !exp.active && io.snapshot().last_release_reason == "lease_expired",
+              "expired UI input lease automatically restores gameplay ownership");
+
+        // 9. Repeated open/close cycles keep acquire/release counts balanced with zero drift
+        const auto before = io.snapshot();
+        for (int cycle = 0; cycle < 10; ++cycle) {
+            const auto t_base = static_cast<std::uint64_t>(2000 + cycle * 100);
+            const auto open_tr = io.acquire("soulspire_core", {true, true, true, 1500}, t_base);
+            const auto close_tr = io.release("soulspire_core", "closed", t_base + 50);
+            check(open_tr.became_active && close_tr.became_inactive && !io.active(),
+                  "repeated open/close cycle acquires and restores cleanly");
+        }
+        const auto after = io.snapshot();
+        check(after.acquire_count == before.acquire_count + 10 && after.release_count == before.release_count + 10,
+              "10 repeated open/close cycles have balanced acquire/release counts");
     }
 
     printf("\n%s (%d failed)\n", g_failed == 0 ? "PASS" : "FAIL", g_failed);

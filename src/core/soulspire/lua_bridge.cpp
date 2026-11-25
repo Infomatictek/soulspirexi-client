@@ -7,8 +7,13 @@
 #include <string>
 #include <vector>
 
+#include "../addons.hpp"
+#include "../gui.hpp"
+#include "../window.hpp"
+#include "input_ownership.hpp"
 #include "soulspire.hpp"
 #include "state.hpp"
+#include "textures.hpp"
 
 namespace vanacore::soulspire::lua_bridge {
 namespace {
@@ -360,6 +365,121 @@ int l_reload(lua_State* L)
     return 1;
 }
 
+int l_load_texture(lua_State* L)
+{
+    const char* path = luaL_checkstring(L, 1);
+    textures::TextureInfo info{};
+    std::string err;
+    if (!textures::load(path != nullptr ? path : "", info, err)) {
+        lua_pushnil(L);
+        lua_pushlstring(L, err.data(), err.size());
+        return 2;
+    }
+    lua_pushnumber(L, static_cast<lua_Number>(info.id));
+    lua_pushinteger(L, info.width);
+    lua_pushinteger(L, info.height);
+    return 3;
+}
+
+int l_free_texture(lua_State* L)
+{
+    const auto id = static_cast<std::uint32_t>(luaL_checknumber(L, 1));
+    lua_pushboolean(L, textures::free_by_id(id) ? 1 : 0);
+    return 1;
+}
+
+int l_release_textures(lua_State* L)
+{
+    lua_pushinteger(L, static_cast<lua_Integer>(textures::release_all_count()));
+    return 1;
+}
+
+int l_texture_stats(lua_State* L)
+{
+    const textures::TextureStats s = textures::stats();
+    lua_newtable(L);
+    lua_pushinteger(L, static_cast<lua_Integer>(s.loaded)); lua_setfield(L, -2, "loaded");
+    lua_pushnumber(L, static_cast<lua_Number>(s.bytes)); lua_setfield(L, -2, "bytes");
+    lua_pushinteger(L, static_cast<lua_Integer>(s.hits)); lua_setfield(L, -2, "hits");
+    lua_pushinteger(L, static_cast<lua_Integer>(s.misses)); lua_setfield(L, -2, "misses");
+    lua_pushinteger(L, static_cast<lua_Integer>(s.failures)); lua_setfield(L, -2, "failures");
+    lua_pushboolean(L, s.device_ready ? 1 : 0); lua_setfield(L, -2, "device_ready");
+    return 1;
+}
+
+int l_acquire_ui_input(lua_State* L)
+{
+    const char* owner = luaL_optstring(L, 1, "soulspire_core");
+    UiInputOptions opts{};
+    if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "block_mouse");
+        if (!lua_isnil(L, -1)) opts.block_mouse = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        lua_getfield(L, 2, "capture_gamepad");
+        if (!lua_isnil(L, -1)) opts.capture_gamepad = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        lua_getfield(L, 2, "show_cursor");
+        if (!lua_isnil(L, -1)) opts.show_cursor = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        lua_getfield(L, 2, "lease_ms");
+        if (lua_isnumber(L, -1)) opts.lease_ms = static_cast<std::uint32_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+    }
+    const UiInputTransition tr = input_ownership().acquire(owner != nullptr ? owner : "soulspire_core", opts, GetTickCount64());
+    if (tr.active) {
+        if (tr.block_mouse) window::block_mouse(true, 400);
+        if (tr.capture_gamepad) gui::want_gamepad(true);
+        gui::set_cursor_override(tr.show_cursor);
+    }
+    lua_pushboolean(L, tr.active ? 1 : 0);
+    return 1;
+}
+
+int l_release_ui_input(lua_State* L)
+{
+    const char* owner = luaL_optstring(L, 1, "soulspire_core");
+    const char* reason = luaL_optstring(L, 2, "closed");
+    const UiInputTransition tr = input_ownership().release(
+        owner != nullptr ? owner : "soulspire_core",
+        reason != nullptr ? reason : "closed",
+        GetTickCount64());
+    if (tr.became_inactive) {
+        window::block_mouse(false);
+        gui::want_gamepad(false);
+        gui::set_cursor_override(false);
+        gui::restore_cursor();
+    }
+    lua_pushboolean(L, !tr.active ? 1 : 0);
+    return 1;
+}
+
+int l_ui_input_state(lua_State* L)
+{
+    const UiInputSnapshot s = input_ownership().snapshot();
+    lua_newtable(L);
+    lua_pushboolean(L, s.active ? 1 : 0); lua_setfield(L, -2, "active");
+    lua_pushboolean(L, s.block_mouse ? 1 : 0); lua_setfield(L, -2, "block_mouse");
+    lua_pushboolean(L, s.capture_gamepad ? 1 : 0); lua_setfield(L, -2, "capture_gamepad");
+    lua_pushboolean(L, s.show_cursor ? 1 : 0); lua_setfield(L, -2, "show_cursor");
+    lua_pushinteger(L, static_cast<lua_Integer>(s.owner_count)); lua_setfield(L, -2, "owner_count");
+    lua_pushinteger(L, static_cast<lua_Integer>(s.acquire_count)); lua_setfield(L, -2, "acquire_count");
+    lua_pushinteger(L, static_cast<lua_Integer>(s.release_count)); lua_setfield(L, -2, "release_count");
+    lua_pushlstring(L, s.last_release_reason.data(), s.last_release_reason.size()); lua_setfield(L, -2, "last_release_reason");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < s.owners.size(); ++i) {
+        lua_pushlstring(L, s.owners[i].data(), s.owners[i].size());
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    lua_setfield(L, -2, "owners");
+    return 1;
+}
+
+int l_ashita_compat_enabled(lua_State* L)
+{
+    lua_pushboolean(L, addons::ashita_enabled() ? 1 : 0);
+    return 1;
+}
+
 int l_diagnostics(lua_State* L)
 {
     const DiagnosticsSnapshot d = engine().diagnostics();
@@ -386,6 +506,14 @@ int l_diagnostics(lua_State* L)
     lua_pushinteger(L, static_cast<lua_Integer>(d.packets_oxmob)); lua_setfield(L, -2, "packets_oxmob");
     lua_pushinteger(L, static_cast<lua_Integer>(d.packets_oxtal)); lua_setfield(L, -2, "packets_oxtal");
     lua_pushinteger(L, static_cast<lua_Integer>(d.suppressed_chat_frames)); lua_setfield(L, -2, "suppressed_chat_frames");
+
+    const textures::TextureStats ts = textures::stats();
+    const UiInputSnapshot uis = input_ownership().snapshot();
+    lua_pushinteger(L, static_cast<lua_Integer>(ts.loaded)); lua_setfield(L, -2, "textures_loaded");
+    lua_pushboolean(L, ts.device_ready ? 1 : 0); lua_setfield(L, -2, "texture_device_ready");
+    lua_pushboolean(L, uis.active ? 1 : 0); lua_setfield(L, -2, "ui_input_active");
+    lua_pushinteger(L, static_cast<lua_Integer>(uis.owner_count)); lua_setfield(L, -2, "ui_input_owner_count");
+    lua_pushboolean(L, addons::ashita_enabled() ? 1 : 0); lua_setfield(L, -2, "ashita_compat_enabled");
 
     lua_newtable(L);
     for (std::size_t i = 0; i < d.hooks.size(); ++i) {
@@ -427,10 +555,18 @@ void push(lua_State* L)
     set_fn(L, "hud",               &l_hud);
     set_fn(L, "mob_status",        &l_mob_status);
     set_fn(L, "all_mob_statuses",  &l_all_mob_statuses);
-    set_fn(L, "request_open_core", &l_request_open_core);
-    set_fn(L, "consume_open_core", &l_consume_open_core);
-    set_fn(L, "reload",            &l_reload);
-    set_fn(L, "diagnostics",       &l_diagnostics);
+    set_fn(L, "request_open_core",     &l_request_open_core);
+    set_fn(L, "consume_open_core",     &l_consume_open_core);
+    set_fn(L, "reload",                &l_reload);
+    set_fn(L, "load_texture",          &l_load_texture);
+    set_fn(L, "free_texture",          &l_free_texture);
+    set_fn(L, "release_textures",      &l_release_textures);
+    set_fn(L, "texture_stats",         &l_texture_stats);
+    set_fn(L, "acquire_ui_input",      &l_acquire_ui_input);
+    set_fn(L, "release_ui_input",      &l_release_ui_input);
+    set_fn(L, "ui_input_state",        &l_ui_input_state);
+    set_fn(L, "ashita_compat_enabled", &l_ashita_compat_enabled);
+    set_fn(L, "diagnostics",           &l_diagnostics);
 }
 
 } // namespace vanacore::soulspire::lua_bridge

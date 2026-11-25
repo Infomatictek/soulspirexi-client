@@ -60,6 +60,9 @@
     <ClCompile Include="..\soulspire\packets.cpp">
       <ObjectFileName>$(IntDir)soulspire_%(Filename).obj</ObjectFileName>
     </ClCompile>
+    <ClCompile Include="..\soulspire\input_ownership.cpp">
+      <ObjectFileName>$(IntDir)soulspire_%(Filename).obj</ObjectFileName>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\ini.hpp" />
@@ -69,6 +72,7 @@
     <ClInclude Include="..\..\shared\vanacore\tls_client.hpp" />
     <ClInclude Include="..\soulspire\state.hpp" />
     <ClInclude Include="..\soulspire\packets.hpp" />
+    <ClInclude Include="..\soulspire\input_ownership.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

@@ -289,6 +289,12 @@ exit /b 0</Command>
     <ClCompile Include="soulspire\lua_bridge.cpp">
       <ObjectFileName>$(IntDir)soulspire_%(Filename).obj</ObjectFileName>
     </ClCompile>
+    <ClCompile Include="soulspire\input_ownership.cpp">
+      <ObjectFileName>$(IntDir)soulspire_%(Filename).obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="soulspire\textures.cpp">
+      <ObjectFileName>$(IntDir)soulspire_%(Filename).obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="soulspire\soulspire.cpp">
       <ObjectFileName>$(IntDir)soulspire_%(Filename).obj</ObjectFileName>
     </ClCompile>
@@ -551,6 +557,8 @@ exit /b 0</Command>
     <ClInclude Include="soulspire\packets.hpp" />
     <ClInclude Include="soulspire\hooks.hpp" />
     <ClInclude Include="soulspire\lua_bridge.hpp" />
+    <ClInclude Include="soulspire\input_ownership.hpp" />
+    <ClInclude Include="soulspire\textures.hpp" />
     <ClInclude Include="soulspire\soulspire.hpp" />
     <ClInclude Include="sparkles.hpp" />
     <ClInclude Include="groundmarks.hpp" />

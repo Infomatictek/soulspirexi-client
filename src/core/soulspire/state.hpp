@@ -17,29 +17,31 @@
 // `soul-identities.json` and `soul-weapon-config.json` from the client install.
 namespace vanacore::soulspire {
 
-constexpr std::uint32_t kNativeApiVersion = 1;
+constexpr std::uint32_t kNativeApiVersion = 2;
 
 // Native capability bitmask (compatible with Soulspire Core & server capability sync).
-constexpr std::uint32_t kCapEquipSoulName     = 1u << 0;
-constexpr std::uint32_t kCapSearchSoulLabels  = 1u << 1;
-constexpr std::uint32_t kCapMagicNames        = 1u << 2;
-constexpr std::uint32_t kCapMagicDescs        = 1u << 3;
-constexpr std::uint32_t kCapMagicTarget       = 1u << 4;
-constexpr std::uint32_t kCapMagicIcons        = 1u << 5;
-constexpr std::uint32_t kCapAbilityNames      = 1u << 6;
-constexpr std::uint32_t kCapAbilityDescs      = 1u << 7;
-constexpr std::uint32_t kCapAbilityTarget     = 1u << 8;
-constexpr std::uint32_t kCapAbilityIcons      = 1u << 9;
-constexpr std::uint32_t kCapMagicVisibility   = 1u << 10;
-constexpr std::uint32_t kCapAbilityVisibility = 1u << 11;
-constexpr std::uint32_t kCapSpellEligibility  = 1u << 12;
-constexpr std::uint32_t kCapSubWeaponRules    = 1u << 13;
-constexpr std::uint32_t kCapSub2HRules        = 1u << 14;
-constexpr std::uint32_t kCapDatVirtualization = 1u << 15;
-constexpr std::uint32_t kCapCommandsMenuEntry = 1u << 16;
-constexpr std::uint32_t kCapWeaponModelResolve = 1u << 17;
-constexpr std::uint32_t kCapWeaponOffhandBone = 1u << 18;
-constexpr std::uint32_t kCapVanaCoreNative    = 1u << 19;
+constexpr std::uint32_t kCapEquipSoulName        = 1u << 0;
+constexpr std::uint32_t kCapSearchSoulLabels     = 1u << 1;
+constexpr std::uint32_t kCapMagicNames           = 1u << 2;
+constexpr std::uint32_t kCapMagicDescs           = 1u << 3;
+constexpr std::uint32_t kCapMagicTarget          = 1u << 4;
+constexpr std::uint32_t kCapMagicIcons           = 1u << 5;
+constexpr std::uint32_t kCapAbilityNames         = 1u << 6;
+constexpr std::uint32_t kCapAbilityDescs         = 1u << 7;
+constexpr std::uint32_t kCapAbilityTarget        = 1u << 8;
+constexpr std::uint32_t kCapAbilityIcons         = 1u << 9;
+constexpr std::uint32_t kCapMagicVisibility      = 1u << 10;
+constexpr std::uint32_t kCapAbilityVisibility    = 1u << 11;
+constexpr std::uint32_t kCapSpellEligibility     = 1u << 12;
+constexpr std::uint32_t kCapSubWeaponRules       = 1u << 13;
+constexpr std::uint32_t kCapSub2HRules           = 1u << 14;
+constexpr std::uint32_t kCapDatVirtualization    = 1u << 15;
+constexpr std::uint32_t kCapCommandsMenuEntry    = 1u << 16;
+constexpr std::uint32_t kCapWeaponModelResolve   = 1u << 17;
+constexpr std::uint32_t kCapWeaponOffhandBone    = 1u << 18;
+constexpr std::uint32_t kCapVanaCoreNative       = 1u << 19;
+constexpr std::uint32_t kCapNativeTextures       = 1u << 20;
+constexpr std::uint32_t kCapNativeInputOwnership = 1u << 21;
 
 enum class ActionKind : std::uint32_t {
     Spell       = 1,

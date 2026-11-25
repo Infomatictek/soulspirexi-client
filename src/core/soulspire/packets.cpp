@@ -1,5 +1,6 @@
 #include "packets.hpp"
 
+#include "input_ownership.hpp"
 #include "state.hpp"
 
 #include <cstring>
@@ -44,9 +45,10 @@ void on_incoming(EngineState& st, std::uint16_t id, const std::uint8_t* data, st
     if (!st.enabled() || data == nullptr || length < 4)
         return;
 
-    // 0x00A (Zone-In) / 0x00B (Zone-Out): clear stale per-zone Soul & mob state.
+    // 0x00A (Zone-In) / 0x00B (Zone-Out): clear stale per-zone Soul & mob state and release UI capture.
     if (id == 0x00A || id == 0x00B) {
         st.reset_session();
+        input_ownership().release_all(id == 0x00A ? "zone_in" : "zone_out", now_ms);
         return;
     }
 

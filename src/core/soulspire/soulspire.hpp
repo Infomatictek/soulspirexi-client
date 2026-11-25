@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 struct lua_State;
 
@@ -14,10 +15,22 @@ namespace vanacore::soulspire {
 void install(const wchar_t* install_dir, const wchar_t* settings_ini);
 
 // Called once per frame from overlay::present() (game thread).
-// Installs coordinated FFXiMain hooks once decrypted and refreshes local job/level.
+// Installs coordinated FFXiMain hooks once decrypted, refreshes local job/level,
+// and applies authoritative UI input & cursor ownership.
 void on_frame();
 
-// Called during shutdown::unload_everything(). Cleanly restores patched FFXiMain sites.
+// Called from gui::begin_frame() / gui::release() so native textures stay bound to the active D3D8 device.
+void on_gui_device(void* device);
+void on_gui_release();
+
+// Called from addons::remove() so unloading an addon immediately releases any UI input capture it held.
+void on_addon_unloaded(std::string_view addon_name);
+
+// True while a VanaCore-native Soulspire UI surface holds authoritative input ownership with cursor visible.
+bool wants_visible_cursor();
+
+// Called during shutdown::unload_everything(). Cleanly restores patched FFXiMain sites,
+// releases textures, and restores normal gameplay input/cursor ownership.
 void shutdown();
 
 // Reloads authoritative soul-identities.json and soul-weapon-config.json from disk.

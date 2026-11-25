@@ -20,6 +20,9 @@ void install(const wchar_t* install_dir, const wchar_t* settings_ini);
 // [addons] silent read again (vanacore.ini changed: /vana's switch); /addon silent's choice holds until it changes
 void reload(const wchar_t* ini);
 
+// [addons] ashita.enabled (default 1): false when Ashita compatibility is explicitly disabled (Modern Native profile).
+bool ashita_enabled();
+
 // Whether `name` (lower case) is one of CatsEyeXI's required plugins (cexidats, cexislots) or addons (customcolors):
 // boot.txt loads them first, and /plugin unload and /addon unload leave them alone.
 bool required(std::string_view name, bool plugin);

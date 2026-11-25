@@ -25,6 +25,7 @@
 #include "layout.hpp"
 #include "mapwin.hpp"
 #include "log.hpp"
+#include "soulspire/soulspire.hpp"
 
 // ImGui's failed checks (imconfig.h): logged once each, then ImGui carries on as Ashita's does.
 void vanacore_imgui_assert(const char* expression, const char* file, int line)
@@ -68,6 +69,7 @@ bool g_texture_failed = false;  // a texture couldn't be made on this device: lo
 LARGE_INTEGER g_frequency{};
 LARGE_INTEGER g_last{};
 int g_cursor = ImGuiMouseCursor_Arrow; // the cursor shape last set
+std::atomic<bool> g_cursor_override{false}; // authoritative visible cursor for VanaCore-native UI
 
 // The mouse's buttons and keys, from messages, through ImGui's input queue (a press and its release
 // inside one frame still reads as a click).
@@ -335,7 +337,14 @@ void set_mouse_position(HWND window, ImVec2 at, unsigned width, unsigned height)
 // ImGui's cursor shapes (resize arrows, the text beam) over its windows, as Ashita sets them.
 void update_cursor(const ImGuiIO& io)
 {
-    const int cursor = io.MouseDrawCursor ? ImGuiMouseCursor_None : ImGui::GetMouseCursor();
+    int cursor = io.MouseDrawCursor ? ImGuiMouseCursor_None : ImGui::GetMouseCursor();
+    if (g_cursor_override.load(std::memory_order_relaxed)) {
+        // Authoritative single hardware cursor while VanaCore-native Soulspire UI owns input.
+        if (g_context != nullptr && g_context->IO.MouseDrawCursor)
+            g_context->IO.MouseDrawCursor = false;
+        if (cursor == ImGuiMouseCursor_None)
+            cursor = ImGuiMouseCursor_Arrow;
+    }
     if (cursor == g_cursor || (io.ConfigFlags & ImGuiConfigFlags_NoMouseCursorChange) != 0)
         return;
     g_cursor = cursor;
@@ -741,6 +750,7 @@ void begin_frame(void* device, HWND window, unsigned width, unsigned height, uns
         release();
         g_device = device;
     }
+    soulspire::on_gui_device(g_device);
     // the IME's window, placed at the text box being typed in
     ImGui::GetMainViewport()->PlatformHandle = ImGui::GetMainViewport()->PlatformHandleRaw = window;
     if (!g_fonts_added)
@@ -816,6 +826,7 @@ void draw(void* device, unsigned width, unsigned height)
 
 void release()
 {
+    soulspire::on_gui_release();
     release_textures();
     g_texture_failed = false;
     g_device = nullptr;
@@ -1137,6 +1148,22 @@ void want_gamepad(bool on)
 bool wants_gamepad()
 {
     return g_gamepad_frames > 0 && shown();
+}
+
+void set_cursor_override(bool visible)
+{
+    g_cursor_override.store(visible, std::memory_order_relaxed);
+    if (visible && g_context != nullptr)
+        g_context->IO.MouseDrawCursor = false;
+}
+
+void restore_cursor()
+{
+    g_cursor_override.store(false, std::memory_order_relaxed);
+    if (g_context != nullptr)
+        g_context->IO.MouseDrawCursor = false;
+    g_cursor = -1;
+    SetCursor(LoadCursorW(nullptr, IDC_ARROW));
 }
 
 } // namespace vanacore::gui

@@ -997,12 +997,12 @@ void install_if_ready()
         std::vector<HookStatus> statuses;
         statuses.push_back({"packet_lifecycle", "packets", "vanacore_shared", "replaced", 0, true, 0, "vanacore::packets integrated"});
         statuses.push_back({"legacy_guard", "guard", "soulspire", "pending", 0, false, 0, "skipped: soulspire_native.dll loaded"});
-        engine().set_hook_statuses(std::move(statuses), kCapVanaCoreNative);
+        engine().set_hook_statuses(std::move(statuses), kCapVanaCoreNative | kCapNativeTextures | kCapNativeInputOwnership);
         return;
     }
 
     std::vector<HookStatus> statuses;
-    std::uint32_t caps = kCapVanaCoreNative;
+    std::uint32_t caps = kCapVanaCoreNative | kCapNativeTextures | kCapNativeInputOwnership;
     g_ability_list_slot = reinterpret_cast<std::uint8_t**>(base + 0x668308u);
 
     // 1. Coordinated VanaCore-owned packet pipeline (zero competing detours on 0xDD6C0/0xDF7C0).

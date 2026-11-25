@@ -43,6 +43,7 @@
 #include "craftlog.hpp"
 #include "ini.hpp"
 #include "log.hpp"
+#include "soulspire/soulspire.hpp"
 #include "lua_api.hpp"
 #include "lua_net.hpp"
 #include "compat/ashita/host.hpp"
@@ -161,6 +162,7 @@ std::atomic<int> g_draw_listeners{0}; // addons listening for a draw call event 
 std::atomic<int> g_scene_listeners{0}; // ... for a scene's begin or end (Addon::scenes), read at each scene
 bool g_silent = false;               // /addon silent ([addons] silent): no chat line for an addon loaded or unloaded
 bool g_silent_ini = false;           // [addons] silent as last read: /addon silent holds until the setting changes
+bool g_ashita_enabled = true;        // [addons] ashita.enabled (default 1; 0 in Modern Native profile)
 
 // Addons held off (hold()): the name in lower case, why, and whether it was loaded or asked for since
 struct Held {
@@ -804,7 +806,14 @@ bool load(const std::string& name, const Source* only = nullptr)
         source_text.erase(0, 3);
     auto created = std::make_unique<Addon>();
     // The kind its code shows, or its folder's when the code doesn't say.
-    created->context = {detect(source_text, source->kind), name, source->word, folder, g_install, g_settings_ini};
+    const Flavour detected_flavour = detect(source_text, source->kind);
+    if (!g_ashita_enabled && (source->kind == Flavour::Ashita || detected_flavour == Flavour::Ashita)) {
+        const std::string msg = "[addons] ashita.enabled=0: Ashita compatibility is disabled in this profile; refusing to load Ashita addon '" + display + "'.";
+        say_error(msg);
+        log::write(L"Addons: %hs", msg.c_str());
+        return false;
+    }
+    created->context = {detected_flavour, name, source->word, folder, g_install, g_settings_ini};
     created->display = display;
     created->source = source->kind;
     created->L = luaL_newstate();
@@ -913,6 +922,7 @@ void remove(Addon& addon)
     gameui::release(gameui::key(addon.context.source, addon.context.name)); // the game's interface as it was before it
     groundmarks::release(addon.context.name); // vana.world.marks
     raise::game_on_top(gameui::key(addon.context.source, addon.context.name), false); // vana.ui.game_on_top
+    soulspire::on_addon_unloaded(addon.context.name);
     if (addon.context.flavour == Flavour::Ashita)
         ashita::release_addon(addon.context.name);
     Fault fault;
@@ -2498,7 +2508,15 @@ void install(const wchar_t* install_dir, const wchar_t* settings_ini)
         log::write(L"Addons: [addons] load=%ls is no longer read: put /addon load lines in scripts\\boot.txt", names);
     g_silent = !g_settings_ini.empty() && GetPrivateProfileIntW(L"addons", L"silent", 0, g_settings_ini.c_str()) != 0;
     g_silent_ini = g_silent;
+    g_ashita_enabled = g_settings_ini.empty() || GetPrivateProfileIntW(L"addons", L"ashita.enabled", 1, g_settings_ini.c_str()) != 0;
+    if (!g_ashita_enabled)
+        log::write(L"Addons: [addons] ashita.enabled=0 — Ashita addon compatibility layer is DISABLED");
     addonpkg::start(install_dir); // .vcaddon opens with this VanaCore; addons\install\ waits for packages
+}
+
+bool ashita_enabled()
+{
+    return g_ashita_enabled;
 }
 
 void reload(const wchar_t* ini)

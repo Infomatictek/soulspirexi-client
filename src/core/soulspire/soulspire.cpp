@@ -7,11 +7,15 @@
 #include <vector>
 
 #include "../game.hpp"
+#include "../gui.hpp"
 #include "../log.hpp"
+#include "../window.hpp"
 #include "hooks.hpp"
+#include "input_ownership.hpp"
 #include "lua_bridge.hpp"
 #include "packets.hpp"
 #include "state.hpp"
+#include "textures.hpp"
 
 namespace vanacore::soulspire {
 namespace {
@@ -114,6 +118,22 @@ void install(const wchar_t* install_dir, const wchar_t* settings_ini)
     reload_registries();
 }
 
+void apply_input_transition(const UiInputTransition& tr)
+{
+    if (tr.active) {
+        if (tr.block_mouse)
+            window::block_mouse(true, 400);
+        if (tr.capture_gamepad)
+            gui::want_gamepad(true);
+        gui::set_cursor_override(tr.show_cursor);
+    } else if (tr.became_inactive) {
+        window::block_mouse(false);
+        gui::want_gamepad(false);
+        gui::set_cursor_override(false);
+        gui::restore_cursor();
+    }
+}
+
 void on_frame()
 {
     if (!engine().enabled())
@@ -121,8 +141,12 @@ void on_frame()
 
     hooks::install_if_ready();
 
-    // Refresh local player job & effective level every 250ms from VanaCore's game memory reader.
+    // Apply authoritative UI input & cursor ownership (handles focus loss & lease expiry).
     const ULONGLONG now = GetTickCount64();
+    const UiInputTransition tr = input_ownership().tick(now, window::in_background());
+    apply_input_transition(tr);
+
+    // Refresh local player job & effective level every 250ms from VanaCore's game memory reader.
     if (now - g_last_job_poll >= 250) {
         g_last_job_poll = now;
         game::PartyMember members[18]{};
@@ -133,8 +157,34 @@ void on_frame()
     }
 }
 
+void on_gui_device(void* device)
+{
+    textures::set_device(device);
+}
+
+void on_gui_release()
+{
+    textures::release_all();
+}
+
+void on_addon_unloaded(std::string_view addon_name)
+{
+    if (addon_name.empty())
+        return;
+    const UiInputTransition tr = input_ownership().release(std::string(addon_name), "addon_unload", GetTickCount64());
+    apply_input_transition(tr);
+}
+
+bool wants_visible_cursor()
+{
+    return engine().enabled() && input_ownership().wants_visible_cursor();
+}
+
 void shutdown()
 {
+    const UiInputTransition tr = input_ownership().release_all("shutdown", GetTickCount64());
+    apply_input_transition(tr);
+    textures::release_all();
     hooks::uninstall();
     engine().set_enabled(false);
 }

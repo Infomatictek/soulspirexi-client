@@ -24,6 +24,7 @@
 #include "ini.hpp"
 #include "input.hpp"
 #include "log.hpp"
+#include "soulspire/soulspire.hpp"
 #include "mousediag.hpp"
 #include "overlay.hpp"
 #include "packets.hpp"
@@ -560,6 +561,10 @@ LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         return 0;
     if (message == WM_SETCURSOR && camera::fly_dragging()) {
         SetCursor(nullptr);
+        return TRUE;
+    }
+    if (message == WM_SETCURSOR && LOWORD(lparam) == HTCLIENT && soulspire::wants_visible_cursor()) {
+        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
         return TRUE;
     }
     if ((message >= WM_MOUSEFIRST && message <= WM_MOUSELAST && mouse(window, message, wparam, lparam)) || fly_release)

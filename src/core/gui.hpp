@@ -87,6 +87,9 @@ void gamepad_key(int key, bool down, float analog);
 // navigates with it, the game reads it at rest
 void want_gamepad(bool on);
 bool wants_gamepad();
+// Authoritative cursor ownership helpers for VanaCore-native Soulspire UI (never calls Win32 ShowCursor).
+void set_cursor_override(bool visible);
+void restore_cursor();
 // In ImGui's frame: the mouse over (x0, y0)-(x1, y1), in the game's pixels, is ImGui's after this frame as over one of
 // its windows (a press there isn't the game's). For what VanaCore draws with no window: buffwin's box being dragged.
 void take_mouse(float x0, float y0, float x1, float y1);
