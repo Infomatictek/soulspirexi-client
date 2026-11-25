@@ -4,7 +4,7 @@
 //
 //   VanaCore.SettingsTest.exe        exit code 0: every check passed
 
-#include <windows.h>
+#include "../../shared/vanacore/tls_client.hpp"
 
 #include <cstdarg>
 #include <cstdio>
@@ -12,6 +12,7 @@
 
 #include "../ini.hpp"
 #include "../settings.hpp"
+#include "../../launcher/login.hpp"
 
 namespace vanacore::log {
 // settings.cpp's log lines, to the console here
@@ -288,6 +289,100 @@ int main()
     RemoveDirectoryW(folder.c_str());
     RemoveDirectoryW(tmp.c_str());
     RemoveDirectoryW(base.c_str());
+
+    // 9. Authentication / TLS 1.3 (SCH_CREDENTIALS v5) & failure classification regressions
+    {
+        namespace login = vanacore::login;
+        check(login::kVersion == login::Version{3, 0, 0}, "default login protocol version matches xiloader 3.0.0");
+
+        login::Version parsed{};
+        check(login::parse_version(L"3.0.0", parsed) && parsed == login::Version{3, 0, 0}, "parse_version accepts 3.0.0");
+        check(login::parse_version(L"3.0", parsed) && parsed == login::Version{3, 0, 0}, "parse_version accepts 3.0");
+        check(!login::parse_version(L"bad.ver", parsed), "parse_version rejects non-numeric version");
+
+        // Verify Windows Schannel SCH_CREDENTIALS v5 outbound credential handle acquisition (TLS 1.3 capable)
+        CredHandle cred{};
+        bool used_v5 = false;
+        const SECURITY_STATUS cred_status = vanacore::tls::acquire_outbound_credentials(cred, used_v5);
+        check(cred_status == SEC_E_OK, "Schannel outbound credentials acquired cleanly");
+        check(used_v5, "Schannel acquired SCH_CREDENTIALS v5 (TLS 1.3 enabled)");
+        if (cred_status == SEC_E_OK)
+            FreeCredentialsHandle(&cred);
+
+        // Verify DNS failure classification
+        std::uint32_t resolved_addr = 0;
+        std::wstring dns_err;
+        check(!login::resolve(L"nonexistent.invalid.soulspirexi.test", resolved_addr, dns_err) && !dns_err.empty(),
+              "DNS failure returns actionable error");
+
+        // Verify TCP connection refused classification on closed loopback port (zero secret leakage)
+        const std::wstring secret_pw = L"SuperSecretRegressionPw!99";
+        WSADATA wsa{};
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+        SOCKET temp_sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        sockaddr_in closed_addr{};
+        closed_addr.sin_family = AF_INET;
+        closed_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        int addr_len = sizeof(closed_addr);
+        std::uint16_t closed_port = 0;
+        if (temp_sock != INVALID_SOCKET &&
+            ::bind(temp_sock, reinterpret_cast<const sockaddr*>(&closed_addr), sizeof(closed_addr)) == 0 &&
+            ::getsockname(temp_sock, reinterpret_cast<sockaddr*>(&closed_addr), &addr_len) == 0) {
+            closed_port = ntohs(closed_addr.sin_port);
+        }
+        if (temp_sock != INVALID_SOCKET)
+            closesocket(temp_sock);
+        if (closed_port != 0) {
+            const login::Result tcp_res =
+                login::log_in(L"127.0.0.1", htonl(INADDR_LOOPBACK), closed_port, L"testuser", secret_pw);
+            check(tcp_res.outcome == login::Outcome::ServerProblem &&
+                      tcp_res.error_category == login::ErrorCategory::TcpConnectFailed,
+                  "closed loopback port classified as TcpConnectFailed");
+            check(tcp_res.message.find(secret_pw) == std::wstring::npos,
+                  "TCP error message never leaks password");
+        }
+
+        // Verify TLS handshake failure classification against a non-TLS loopback listener
+        SOCKET plain_listener = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        sockaddr_in plain_addr{};
+        plain_addr.sin_family = AF_INET;
+        plain_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        int plain_len = sizeof(plain_addr);
+        if (plain_listener != INVALID_SOCKET &&
+            ::bind(plain_listener, reinterpret_cast<const sockaddr*>(&plain_addr), sizeof(plain_addr)) == 0 &&
+            ::listen(plain_listener, 1) == 0 &&
+            ::getsockname(plain_listener, reinterpret_cast<sockaddr*>(&plain_addr), &plain_len) == 0) {
+            const std::uint16_t plain_port = ntohs(plain_addr.sin_port);
+            HANDLE srv = CreateThread(
+                nullptr, 0,
+                [](void* p) -> DWORD {
+                    SOCKET s = reinterpret_cast<SOCKET>(p);
+                    SOCKET c = ::accept(s, nullptr, nullptr);
+                    if (c != INVALID_SOCKET) {
+                        const char junk[] = "NOT_TLS_PLAINTEXT_BANNER\r\n";
+                        ::send(c, junk, static_cast<int>(sizeof(junk) - 1), 0);
+                        closesocket(c);
+                    }
+                    return 0;
+                },
+                reinterpret_cast<void*>(plain_listener), 0, nullptr);
+            const login::Result tls_res =
+                login::log_in(L"127.0.0.1", htonl(INADDR_LOOPBACK), plain_port, L"testuser", secret_pw);
+            if (srv != nullptr) {
+                WaitForSingleObject(srv, 3000);
+                CloseHandle(srv);
+            }
+            closesocket(plain_listener);
+            check(tls_res.outcome == login::Outcome::ServerProblem &&
+                      tls_res.error_category == login::ErrorCategory::TlsHandshakeFailed,
+                  "non-TLS server classified as TlsHandshakeFailed");
+            check(tls_res.message.find(secret_pw) == std::wstring::npos,
+                  "TLS error message never leaks password");
+        } else if (plain_listener != INVALID_SOCKET) {
+            closesocket(plain_listener);
+        }
+        WSACleanup();
+    }
 
     printf("\n%s (%d failed)\n", g_failed == 0 ? "PASS" : "FAIL", g_failed);
     return g_failed == 0 ? 0 : 1;

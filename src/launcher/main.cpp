@@ -393,7 +393,9 @@ int log_in(int argc, wchar_t** argv, const vanacore::Settings& settings, vanacor
         return refuse(result.message, result.outcome == vanacore::login::Outcome::Refused
                                           ? vanacore::kExitLoginRefused
                                           : vanacore::kExitServerProblem);
-    say(stdout, L"Logged in.", kGrey);
+    say(stdout,
+        result.tls_protocol.empty() ? L"Logged in." : (L"Logged in (" + result.tls_protocol + L")."),
+        kGrey);
 
     login.account_id = result.account_id;
     std::memcpy(login.session_hash, result.session_hash, sizeof(login.session_hash));
@@ -401,6 +403,10 @@ int log_in(int argc, wchar_t** argv, const vanacore::Settings& settings, vanacor
     login.language = language;
     login.data_port = kDataPort;
     login.view_port = kViewPort;
+    login.lobby_tls = version[0] >= 3 ? 1u : 0u;
+    login.has_server_key = result.has_server_key ? 1u : 0u;
+    if (result.has_server_key)
+        std::memcpy(login.server_key_sha256, result.server_key_sha256, sizeof(login.server_key_sha256));
     return 0;
 }
 

@@ -55,6 +55,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\shared\vanacore\boot_info.hpp" />
+    <ClInclude Include="..\shared\vanacore\tls_client.hpp" />
     <ClInclude Include="ini.hpp" />
     <ClInclude Include="inject.hpp" />
     <ClInclude Include="login.hpp" />

@@ -1,8 +1,6 @@
 #include "loader.hpp"
 
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
+#include <vanacore/tls_client.hpp>
 
 #include <bcrypt.h>
 #include <objbase.h>
@@ -113,9 +111,13 @@ GameLogin g_login{};
 // polcore; the stand-in here answers zeros, so polcore's slot for it gives this instead (session_value).
 std::uint8_t g_session_value[16] = {};
 std::atomic<char*> g_character_slots{nullptr}; // polcore's, once found
-SOCKET g_data = INVALID_SOCKET;                 // the lobby's data link to the server
+SOCKET g_data = INVALID_SOCKET;                 // the lobby's data link to the server (legacy plaintext mode)
+vanacore::tls::Client g_data_tls;               // the lobby's TLS 1.3 data link (xiloader v3.0+ mode)
+SOCKET g_view_relay = INVALID_SOCKET;           // local loopback TLS 1.3 relay listener for lobby view (54001)
+std::uint16_t g_view_relay_port = 0;            // ephemeral loopback port for lobby view TLS 1.3 relay
 SOCKET g_profile = INVALID_SOCKET;              // the stand-in profile server's listener
 char g_server[INET_ADDRSTRLEN] = {};            // the server's address, dotted
+std::wstring g_server_host;                     // the server's hostname for TLS SNI
 
 // polcore keeps pointers to these for the whole session
 char g_command_line[64] = {};
@@ -236,7 +238,24 @@ hostent* WINAPI get_host_by_name(const char* name)
 
 int WINAPI connect_traced(SOCKET socket, const sockaddr* to, int length)
 {
-    const int result = g_connect(socket, to, length);
+    sockaddr_in redirected{};
+    const sockaddr* actual_to = to;
+    int actual_length = length;
+    if (g_login.lobby_tls != 0 && g_view_relay_port != 0 && to != nullptr &&
+        length >= static_cast<int>(sizeof(sockaddr_in)) && to->sa_family == AF_INET) {
+        const auto* in = reinterpret_cast<const sockaddr_in*>(to);
+        if (in->sin_addr.s_addr == g_login.server_address && ntohs(in->sin_port) == g_login.view_port) {
+            redirected = *in;
+            redirected.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            redirected.sin_port = htons(g_view_relay_port);
+            actual_to = reinterpret_cast<const sockaddr*>(&redirected);
+            actual_length = static_cast<int>(sizeof(redirected));
+            if (tracing())
+                log::write(L"Lobby: redirecting view port %u through local TLS 1.3 relay (127.0.0.1:%u)",
+                           g_login.view_port, g_view_relay_port);
+        }
+    }
+    const int result = g_connect(socket, actual_to, actual_length);
     const DWORD error = GetLastError();
     if (to != nullptr && to->sa_family == AF_INET && tracing())
         log::write(L"Lobby: connecting to %hs: %ls", address_text(*reinterpret_cast<const sockaddr_in*>(to)).c_str(),
@@ -321,7 +340,9 @@ int WINAPI send_lobby(SOCKET socket, const char* data, int size, int flags)
         return g_send(socket, data, size, flags);
     }
     const std::uint16_t port = known_peer ? ntohs(peer.sin_port) : 0;
-    const bool lobby = port == g_login.view_port || port == g_login.data_port;
+    const bool is_view_relay =
+        known_peer && g_view_relay_port != 0 && port == g_view_relay_port && peer.sin_addr.s_addr == htonl(INADDR_LOOPBACK);
+    const bool lobby = port == g_login.view_port || port == g_login.data_port || is_view_relay;
     // each command's first, in the log
     static std::atomic<std::uint64_t> logged{0};
     const std::uint64_t bit = std::uint64_t{1} << (command & 63);
@@ -398,20 +419,50 @@ bool send_all(SOCKET socket, const char* data, int size)
     return true;
 }
 
+bool send_all_raw(SOCKET socket, const char* data, int size)
+{
+    while (size > 0) {
+        const int sent = g_send != nullptr ? g_send(socket, data, size, 0) : ::send(socket, data, size, 0);
+        if (sent <= 0)
+            return false;
+        data += sent;
+        size -= sent;
+    }
+    return true;
+}
+
+bool send_data_packet(const char* data, int size)
+{
+    if (g_login.lobby_tls != 0)
+        return g_data_tls.write(data, static_cast<std::size_t>(size));
+    return send_all(g_data, data, size);
+}
+
+int recv_data_packet(char* data, int size, std::wstring& error)
+{
+    if (g_login.lobby_tls != 0)
+        return g_data_tls.read_some(data, size, error);
+    return ::recv(g_data, data, size, 0);
+}
+
 DWORD WINAPI data_link(void*)
 {
     char out[28] = {};
     out[0] = static_cast<char>(0xFE); // the session, so the server can pair this link with the login
     std::memcpy(out + 12, g_login.session_hash, sizeof(g_login.session_hash));
-    if (!send_all(g_data, out, static_cast<int>(sizeof(out)))) {
+    if (!send_data_packet(out, static_cast<int>(sizeof(out)))) {
         log::write(L"Lobby: couldn't open the data link (winsock error %d)", WSAGetLastError());
         return 0;
     }
     char in[4096];
+    std::wstring tls_error;
     for (;;) {
-        const int got = recv(g_data, in, sizeof(in), 0);
-        if (got < 2)
+        const int got = recv_data_packet(in, sizeof(in), tls_error);
+        if (got < 2) {
+            if (got < 0 && !tls_error.empty())
+                log::write(L"Lobby: data link TLS read error: %ls", tls_error.c_str());
             break; // the server closed it (the lobby is done), or the game is closing
+        }
         std::memset(out, 0, sizeof(out));
         switch (static_cast<unsigned char>(in[0])) {
         case 0x01: // who's this: the account, and the server as the game knows it
@@ -420,7 +471,7 @@ DWORD WINAPI data_link(void*)
             std::memcpy(out + 5, &g_login.server_address, 4);
             std::memcpy(out + 12, g_login.session_hash, sizeof(g_login.session_hash));
             log::write(L"Lobby: sending the account");
-            send_all(g_data, out, static_cast<int>(sizeof(out)));
+            send_data_packet(out, static_cast<int>(sizeof(out)));
             break;
         case 0x02:
         case 0x15: // the key: the session value (what servers before LandSandBoat #11736 key the zone with), and
@@ -433,7 +484,7 @@ DWORD WINAPI data_link(void*)
             out[20] = static_cast<char>(0xAD);
             log::write(L"Lobby: sending the key (value %08X, LandSandBoat xi_connect's \"key value\" fingerprint)",
                        key_fingerprint());
-            send_all(g_data, out, static_cast<int>(sizeof(out)));
+            send_data_packet(out, static_cast<int>(sizeof(out)));
             break;
         case 0x03: { // the characters: into polcore's slots, where the lobby lists them
             char* slots = g_character_slots.load();
@@ -463,6 +514,80 @@ DWORD WINAPI data_link(void*)
         }
     }
     log::write(L"Lobby: data link closed");
+    return 0;
+}
+
+// --- Local TLS 1.3 relay for the lobby view port (54001) on LandSandBoat xiloader v3.0+ ----------
+
+struct ViewRelayPump {
+    SOCKET local;
+    vanacore::tls::Client* remote;
+};
+
+DWORD WINAPI view_relay_local_to_tls(void* parameter)
+{
+    auto* pump = static_cast<ViewRelayPump*>(parameter);
+    char buffer[16384];
+    for (;;) {
+        const int got = g_recv != nullptr ? g_recv(pump->local, buffer, sizeof(buffer), 0)
+                                          : ::recv(pump->local, buffer, sizeof(buffer), 0);
+        if (got <= 0)
+            break;
+        if (!pump->remote->write(buffer, static_cast<std::size_t>(got)))
+            break;
+    }
+    pump->remote->shutdown_socket();
+    return 0;
+}
+
+DWORD WINAPI view_relay_client(void* parameter)
+{
+    const SOCKET local = reinterpret_cast<SOCKET>(parameter);
+    vanacore::tls::Client remote;
+    std::wstring tls_error;
+    const std::uint8_t* expected_key = g_login.has_server_key != 0 ? g_login.server_key_sha256 : nullptr;
+    if (!remote.connect(g_login.server_address, g_login.view_port, g_server_host, tls_error, expected_key, 30000,
+                        g_connect)) {
+        log::write(L"Lobby: TLS 1.3 view relay connection to %hs:%u failed: %ls", g_server, g_login.view_port,
+                   tls_error.c_str());
+        closesocket(local);
+        return 0;
+    }
+    log::write(L"Lobby: TLS view relay connected to %hs:%u (%ls)", g_server, g_login.view_port,
+               vanacore::tls::protocol_name(remote.negotiated_protocol()).c_str());
+
+    ViewRelayPump pump{local, &remote};
+    HANDLE writer = CreateThread(nullptr, 0, &view_relay_local_to_tls, &pump, 0, nullptr);
+    char buffer[16384];
+    for (;;) {
+        const int got = remote.read_some(buffer, static_cast<int>(sizeof(buffer)), tls_error);
+        if (got <= 0)
+            break;
+        if (!send_all_raw(local, buffer, got))
+            break;
+    }
+    ::shutdown(local, SD_BOTH);
+    remote.shutdown_socket();
+    if (writer != nullptr) {
+        WaitForSingleObject(writer, 2000);
+        CloseHandle(writer);
+    }
+    closesocket(local);
+    return 0;
+}
+
+DWORD WINAPI view_relay_server(void*)
+{
+    for (;;) {
+        const SOCKET client = accept(g_view_relay, nullptr, nullptr);
+        if (client == INVALID_SOCKET)
+            break;
+        const HANDLE thread = CreateThread(nullptr, 0, &view_relay_client, reinterpret_cast<void*>(client), 0, nullptr);
+        if (thread != nullptr)
+            CloseHandle(thread);
+        else
+            closesocket(client);
+    }
     return 0;
 }
 
@@ -650,6 +775,8 @@ bool prepare_polcore(HMODULE polcore, Command* table, std::uint16_t profile_port
 int run_game(const BootInfo& boot)
 {
     g_login = boot.login;
+    g_server_host = boot.server;
+    g_view_relay_port = 0;
     if (!md5(g_login.session_hash, sizeof(g_login.session_hash), g_session_value)) {
         std::memset(g_session_value, 0, sizeof(g_session_value));
         log::write(L"Game start: Windows couldn't work out the session value (MD5): zeros, which servers since "
@@ -679,21 +806,40 @@ int run_game(const BootInfo& boot)
     }
 
     int result = kExitGameStartFailed;
-    HANDLE data_thread = nullptr, profile_thread = nullptr;
+    HANDLE data_thread = nullptr, profile_thread = nullptr, view_relay_thread = nullptr;
     void* polcore = nullptr;
     void* game = nullptr;
     do {
-        // The lobby's data link, and the profile server's stand-in
-        g_data = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        sockaddr_in to{};
-        to.sin_family = AF_INET;
-        to.sin_port = htons(g_login.data_port);
-        to.sin_addr = server;
-        if (g_data == INVALID_SOCKET ||
-            connect(g_data, reinterpret_cast<const sockaddr*>(&to), sizeof(to)) == SOCKET_ERROR) {
-            report(L"couldn't connect to the lobby at %hs:%u (winsock error %d)", g_server, g_login.data_port,
-                   WSAGetLastError());
-            break;
+        // The lobby's data link, optional TLS 1.3 view relay (xiloader v3.0+), and the profile server's stand-in
+        if (g_login.lobby_tls != 0) {
+            std::wstring tls_error;
+            const std::uint8_t* expected_key = g_login.has_server_key != 0 ? g_login.server_key_sha256 : nullptr;
+            if (!g_data_tls.connect(g_login.server_address, g_login.data_port, g_server_host, tls_error, expected_key,
+                                    15000, g_connect)) {
+                report(L"couldn't connect to the lobby at %hs:%u over TLS: %ls", g_server, g_login.data_port,
+                       tls_error.c_str());
+                break;
+            }
+            g_view_relay_port = listen_locally(g_view_relay);
+            if (g_view_relay_port == 0) {
+                report(L"couldn't open the local TLS 1.3 lobby view relay (winsock error %d)", WSAGetLastError());
+                break;
+            }
+            view_relay_thread = CreateThread(nullptr, 0, &view_relay_server, nullptr, 0, nullptr);
+            log::write(L"Game start: lobby data link open (%ls); view TLS relay on port %u",
+                       vanacore::tls::protocol_name(g_data_tls.negotiated_protocol()).c_str(), g_view_relay_port);
+        } else {
+            g_data = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            sockaddr_in to{};
+            to.sin_family = AF_INET;
+            to.sin_port = htons(g_login.data_port);
+            to.sin_addr = server;
+            if (g_data == INVALID_SOCKET ||
+                g_connect(g_data, reinterpret_cast<const sockaddr*>(&to), sizeof(to)) == SOCKET_ERROR) {
+                report(L"couldn't connect to the lobby at %hs:%u (winsock error %d)", g_server, g_login.data_port,
+                       WSAGetLastError());
+                break;
+            }
         }
         const std::uint16_t profile_port = listen_locally(g_profile);
         if (profile_port == 0) {
@@ -770,16 +916,27 @@ int run_game(const BootInfo& boot)
         static_cast<IUnknown*>(game)->Release();
     if (polcore != nullptr)
         static_cast<IUnknown*>(polcore)->Release();
-    // Closing the sockets ends both threads
-    if (g_data != INVALID_SOCKET)
+    // Closing the sockets ends all lobby/profile threads
+    g_data_tls.shutdown_socket();
+    if (g_data != INVALID_SOCKET) {
         closesocket(g_data);
-    if (g_profile != INVALID_SOCKET)
+        g_data = INVALID_SOCKET;
+    }
+    if (g_view_relay != INVALID_SOCKET) {
+        closesocket(g_view_relay);
+        g_view_relay = INVALID_SOCKET;
+    }
+    g_view_relay_port = 0;
+    if (g_profile != INVALID_SOCKET) {
         closesocket(g_profile);
-    for (HANDLE thread : {data_thread, profile_thread})
+        g_profile = INVALID_SOCKET;
+    }
+    for (HANDLE thread : {data_thread, profile_thread, view_relay_thread})
         if (thread != nullptr) {
             WaitForSingleObject(thread, 1000);
             CloseHandle(thread);
         }
+    g_data_tls.close();
     CoUninitialize();
     WSACleanup();
     return result;
