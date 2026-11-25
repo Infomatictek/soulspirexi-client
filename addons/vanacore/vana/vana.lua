@@ -2369,7 +2369,7 @@ local function draw_extension(row, id, x, w, lx, right, cy, alpha)
     local sx = right - S(M.SW_W)
     local on, flipped = M.switch(id, sx, cy, row.on, not row.fixed, alpha)
     if imgui.IsItemHovered() then
-        M.tooltip(row.fixed and 'CatsEyeXI needs it: it stays loaded' or row.on and 'Switch off (unload it)' or 'Switch on (load it)')
+        M.tooltip(row.fixed and 'Required by client configuration: it stays loaded' or row.on and 'Switch off (unload it)' or 'Switch on (load it)')
     end
     if flipped then
         row.on = on
@@ -2534,7 +2534,7 @@ local function draw_banner(row, lx, right, y)
         local iw = ih * 4 -- banner.png is 1024 x 256
         dl:AddImage(M.logo.banner, { cx - iw / 2, iy }, { cx + iw / 2, iy + ih })
     else -- (banner.png couldn't be loaded)
-        M.text_centred(dl, bx, iy, bw, ih, 'VANACORE', P.accent, fonts.semi, BODY + 18)
+        M.text_centred(dl, bx, iy, bw, ih, 'SOULSPIREXI CLIENT', P.accent, fonts.semi, BODY + 18)
     end
     local ty = iy + ih + S(8)
     M.text_centred(dl, bx, ty, bw, S(22), row.tagline or '', P.white, fonts.semi, BODY)

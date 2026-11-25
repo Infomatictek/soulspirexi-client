@@ -27,7 +27,7 @@ namespace {
 
 constexpr int kDepth = 16;     // folder levels listed under an overlay
 constexpr size_t kLogged = 20; // files logged as they're served, unless [pivot] log=1 (all of them)
-constexpr const wchar_t* kServer = L"catseyexi"; // the server's own overlay (server_first())
+constexpr const wchar_t* kServer = L"soulspirexi"; // the server's own overlay (server_first())
 constexpr DWORD kPoll = 500;       // ms between watch()'s looks at the ini
 constexpr ULONGLONG kQuiet = 1500; // ms the root folder is left alone before its overlays are listed again
 constexpr ULONGLONG kSettle = 300; // ms after the ini changes: the /vana Pivot tab writes [pivot.order] a key at a time

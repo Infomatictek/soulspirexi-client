@@ -141,7 +141,7 @@ local PAGES = {
             tog('np_bazaar', 'Bazaar bag', true, 'Shows the bag icon by players with a bazaar.'),
             tog('np_linkshell', 'Linkshell pearl', true, 'Shows the linkshell pearl by names.'),
             tog('np_mastery', 'Mastery stars', true, 'Shows the mastery stars by names.'),
-            tog('np_gm', 'Staff GM icons', true, 'CatsEyeXI\'s staff icons in place of the game\'s GM icon.'),
+            tog('np_gm', 'Staff GM icons', true, 'Server staff icons in place of the game\'s GM icon.'),
             sel('np_starstyle', 'Star style', 'game', { { 'game', 'Game\'s' }, { 'one', 'One star' }, { 'small', 'Small stars' } }, 'The mastery stars as the game draws them.') } },
         { title = 'Positioning', items = {
             tog('np_center', 'Centre name', true, 'Centres the name\'s letters over the head.'),

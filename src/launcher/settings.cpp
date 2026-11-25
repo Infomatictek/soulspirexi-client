@@ -28,9 +28,13 @@ Settings load_settings(const std::wstring& vanacore_dir, const std::wstring& ini
     if (!retail_pol.empty())
         settings.retail_pol = (dir / retail_pol).lexically_normal().wstring();
     settings.server = ini_read(ini, L"server", L"server", kDefaultServer);
-    // GetPrivateProfileString drops enclosing quotes: password="a b" reads as a b.
     settings.user = ini_read(ini, L"server", L"user");
-    settings.password = ini_read(ini, L"server", L"password");
+    std::wstring ini_password = ini_read(ini, L"server", L"password");
+    settings.plaintext_password_in_ini = !ini_password.empty();
+    if (!ini_password.empty()) {
+        SecureZeroMemory(ini_password.data(), ini_password.size() * sizeof(wchar_t));
+        ini_password.clear();
+    }
     settings.login_version = ini_read(ini, L"server", L"loginversion");
     return settings;
 }

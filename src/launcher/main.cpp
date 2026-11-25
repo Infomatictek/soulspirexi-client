@@ -12,7 +12,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <initializer_list>
+#include <iterator>
 #include <string>
 
 #include "inject.hpp"
@@ -155,14 +157,13 @@ int fail(const std::wstring& message)
     return 1;
 }
 
-// The login failed: said on the console and in a message box, as the CatsEyeXI launcher that
-// started VanaCore is where to try again. VanaCore then closes without waiting for a key.
+// The login failed: said on the console and in a message box. VanaCore then closes without waiting for a key.
 int refuse(const std::wstring& message, int code)
 {
-    say(stderr, L"VanaCore: couldn't log in: " + message, kRed);
+    say(stderr, L"SoulspireXI Client: couldn't log in: " + message, kRed);
     g_refused = true;
-    const std::wstring text = message + L"\n\nPlease try again from the CatsEyeXI launcher.";
-    MessageBoxW(nullptr, text.c_str(), L"CatsEyeXI", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+    const std::wstring text = message + L"\n\nPlease verify your credentials and try again.";
+    MessageBoxW(nullptr, text.c_str(), L"SoulspireXI Client", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
     return code;
 }
 
@@ -251,13 +252,87 @@ std::wstring server_host(int argc, wchar_t** argv, const vanacore::Settings& set
     return server;
 }
 
-// VanaCore's own login ([client] bootloader unset): --server, --user (--username), --password
-// (--pass) and --lang from the command line, else vanacore.ini's [server]. 0 once logged in, with
-// what the game process needs in `login`; otherwise the exit code, having said why.
+// Reads a single UTF-8 password line from stdin pipe (--password-stdin), trimming trailing CR/LF and scrubbing raw bytes.
+bool read_password_stdin(std::wstring& out)
+{
+    const HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+    if (input == nullptr || input == INVALID_HANDLE_VALUE)
+        return false;
+    std::string raw;
+    char ch = '\0';
+    DWORD got = 0;
+    constexpr size_t kMaxBytes = 512;
+    while (raw.size() < kMaxBytes && ReadFile(input, &ch, 1, &got, nullptr) != FALSE && got == 1) {
+        if (ch == '\n')
+            break;
+        raw.push_back(ch);
+    }
+    while (!raw.empty() && (raw.back() == '\r' || raw.back() == '\n'))
+        raw.pop_back();
+    bool ok = false;
+    if (!raw.empty()) {
+        const int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, raw.data(), static_cast<int>(raw.size()),
+                                               nullptr, 0);
+        if (needed > 0) {
+            out.assign(static_cast<size_t>(needed), L'\0');
+            MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, raw.data(), static_cast<int>(raw.size()), out.data(),
+                                needed);
+            ok = true;
+        }
+    }
+    if (!raw.empty())
+        SecureZeroMemory(raw.data(), raw.size());
+    return ok;
+}
+
+// Prompts interactively on an attached Windows console; when `hidden` is true, disables console echo so the password is
+// never printed or logged.
+bool prompt_console_line(const wchar_t* prompt, bool hidden, std::wstring& out)
+{
+    const HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+    const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode = 0;
+    if (input == nullptr || input == INVALID_HANDLE_VALUE || !GetConsoleMode(input, &mode))
+        return false;
+    if (output != nullptr && output != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteConsoleW(output, prompt, static_cast<DWORD>(std::wcslen(prompt)), &written, nullptr);
+    }
+    if (hidden)
+        SetConsoleMode(input, (mode | ENABLE_LINE_INPUT) & ~static_cast<DWORD>(ENABLE_ECHO_INPUT));
+    wchar_t buffer[256] = {};
+    DWORD read = 0;
+    const BOOL ok = ReadConsoleW(input, buffer, static_cast<DWORD>(std::size(buffer) - 1), &read, nullptr);
+    if (hidden) {
+        SetConsoleMode(input, mode);
+        if (output != nullptr && output != INVALID_HANDLE_VALUE) {
+            DWORD written = 0;
+            WriteConsoleW(output, L"\r\n", 2, &written, nullptr);
+        }
+    }
+    if (ok == FALSE) {
+        SecureZeroMemory(buffer, sizeof(buffer));
+        return false;
+    }
+    while (read > 0 && (buffer[read - 1] == L'\r' || buffer[read - 1] == L'\n'))
+        --read;
+    out.assign(buffer, read);
+    SecureZeroMemory(buffer, sizeof(buffer));
+    return !out.empty();
+}
+
+// SoulspireXI secure login ([client] bootloader unset): --server, --user (--username), --password-stdin and --lang from
+// the command line, else vanacore.ini's [server] (server/user only; plaintext passwords in INI or CLI are refused).
+// 0 once logged in, with what the game process needs in `login`; otherwise the exit code, having said why.
 int log_in(int argc, wchar_t** argv, const vanacore::Settings& settings, vanacore::GameLogin& login)
 {
-    std::wstring server = settings.server, user = settings.user, password = settings.password;
+    if (settings.plaintext_password_in_ini)
+        return fail(L"plaintext [server] password= in vanacore.ini is disabled for credential safety. Remove password= "
+                    L"from vanacore.ini and use --password-stdin or the hidden interactive prompt.");
+
+    std::wstring server = settings.server, user = settings.user, password;
     std::uint32_t language = 1;
+    bool password_stdin = false;
     for (int i = 1; i < argc; ++i) {
         const auto is = [&](std::initializer_list<const wchar_t*> names) {
             for (const wchar_t* name : names)
@@ -265,22 +340,36 @@ int log_in(int argc, wchar_t** argv, const vanacore::Settings& settings, vanacor
                     return i + 1 < argc;
             return false;
         };
-        if (is({L"--server"}))
+        if (_wcsicmp(argv[i], L"--password") == 0 || _wcsicmp(argv[i], L"--pass") == 0)
+            return fail(L"plaintext --password / --pass command-line arguments are disabled for credential safety. "
+                        L"Use --password-stdin (piped stdin) or omit the password for a hidden interactive prompt.");
+        if (_wcsicmp(argv[i], L"--password-stdin") == 0)
+            password_stdin = true;
+        else if (is({L"--server"}))
             server = argv[++i];
         else if (is({L"--user", L"--username"}))
             user = argv[++i];
-        else if (is({L"--password", L"--pass"}))
-            password = argv[++i];
         else if (is({L"--lang"}))
             language = region(argv[++i]);
         else if (is({L"--ini"}))
             ++i; // the settings file: wmain's
         else if (std::wstring(argv[i]).starts_with(L"--"))
-            note(L"ignoring " + std::wstring(argv[i]) + L": VanaCore's login doesn't use it");
+            note(L"ignoring " + std::wstring(argv[i]) + L": SoulspireXI login doesn't use it");
     }
-    if (user.empty() || password.empty())
-        return fail(L"no username or password to log in with. Start VanaCore from the CatsEyeXI launcher, or set "
-                    L"[server] user= and password= in vanacore.ini.");
+    if (user.empty())
+        prompt_console_line(L"SoulspireXI Username: ", false, user);
+    if (password_stdin) {
+        if (!read_password_stdin(password))
+            return fail(L"--password-stdin was specified, but no password could be read from stdin.");
+    } else if (password.empty()) {
+        prompt_console_line(L"SoulspireXI Password: ", true, password);
+    }
+    if (user.empty() || password.empty()) {
+        if (!password.empty())
+            SecureZeroMemory(password.data(), password.size() * sizeof(wchar_t));
+        return fail(L"no username or password to log in with. Pass --user <name> with --password-stdin, or run "
+                    L"interactively in a console window to enter credentials safely.");
+    }
 
     std::wstring error;
     std::uint32_t address = 0;
@@ -397,8 +486,6 @@ int bootloader_target(const vanacore::Settings& settings, const std::wstring& se
         target.command_line += L" --server " + quote(settings.server);
     if (!settings.user.empty() && !passed({L"--user", L"--username"}))
         target.command_line += L" --user " + quote(settings.user);
-    if (!settings.password.empty() && !passed({L"--password", L"--pass"}))
-        target.command_line += L" --password " + quote(settings.password);
     target.passthrough = 1;
     return 0;
 }
@@ -424,9 +511,9 @@ int missing_settings(int argc, wchar_t** argv, const std::wstring& dir, const st
         return 0;
     say(stderr, L"VanaCore: the settings file " + settings_ini + L" (--ini) isn't there.", kRed);
     g_refused = true;
-    const std::wstring text = L"VanaCore's settings file for this account isn't there:\n" + settings_ini +
-                              L"\n\nPlease start the game again from the CatsEyeXI launcher, which makes it.";
-    MessageBoxW(nullptr, text.c_str(), L"CatsEyeXI", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+    const std::wstring text = L"The settings file for this launch wasn't found:\n" + settings_ini +
+                              L"\n\nPlease check --ini or create vanacore.ini from vanacore.soulspire-minimal.ini.";
+    MessageBoxW(nullptr, text.c_str(), L"SoulspireXI Client", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
     return vanacore::kExitGameStartFailed;
 }
 
@@ -566,9 +653,11 @@ int wmain(int argc, wchar_t** argv)
         return run_game();
     if (first == L"/?" || first == L"-h") {
         std::fwprintf(stderr,
-                      L"usage: VanaCore.exe [--server S] [--user U --password P] [--lang JP|US|EU]\n"
-                      L"                                                 CatsEyeXI: logs in and starts the game, from\n"
-                      L"                                                 vanacore.ini (default server %ls)\n"
+                      L"usage: VanaCore.exe [--server S] [--user U] [--password-stdin] [--lang JP|US|EU]\n"
+                      L"                                                 SoulspireXI (based on VanaCore): logs in securely\n"
+                      L"                                                 using --password-stdin or a hidden prompt (default\n"
+                      L"                                                 server %ls; plaintext --password and INI password=\n"
+                      L"                                                 are disabled)\n"
                       L"       VanaCore.exe --retail                     (or [client] retail=1) PlayOnline as installed: the\n"
                       L"                                                 registry's pol.exe, no login of VanaCore's own\n"
                       L"       VanaCore.exe [bootloader arguments...]    the same through [client] bootloader=\n"
@@ -595,7 +684,7 @@ int wmain(int argc, wchar_t** argv)
         if (GetConsoleMode(input, &mode))
             SetConsoleMode(input, (mode & ~static_cast<DWORD>(ENABLE_QUICK_EDIT_MODE)) | ENABLE_EXTENDED_FLAGS);
     }
-    say(stdout, L"Welcome to CatsEyeXI VanaCore!", kMagenta);
+    say(stdout, L"Welcome to SoulspireXI Experimental Client (based on VanaCore)!", kMagenta);
     const int result = run(argc, argv, settings_ini);
     note(L"exiting with code " + describe_exit(static_cast<DWORD>(result)));
     // A window VanaCore owns would close now and take any error with it: wait for a key first.

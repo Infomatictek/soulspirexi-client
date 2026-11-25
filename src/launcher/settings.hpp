@@ -4,7 +4,7 @@
 
 namespace vanacore {
 
-inline constexpr wchar_t kDefaultServer[] = L"server.catseyexi.com";
+inline constexpr wchar_t kDefaultServer[] = L"play.soulspirexi.com";
 
 // What Windower starts pol.exe with: /game eAZcFcB turns on FFXI's quick start button
 inline constexpr wchar_t kDefaultRetailArgs[] = L"/game eAZcFcB";
@@ -22,9 +22,10 @@ struct Settings {
     std::wstring retail_region; // [client] retail.region= jp, us or eu; default: the first install the registry has
     std::wstring retail_args;   // [client] retail.args=   pol.exe's arguments; default /game eAZcFcB (FFXI's quick start button)
     std::wstring retail_pol; // [client] retail.pol= PlayOnline's folder in place of the registry's; empty: the registry's
-    std::wstring server;     // [server] server=     default: server.catseyexi.com
-    std::wstring user;       // [server] user=       the login's (--user); with a bootloader, empty: it asks
-    std::wstring password;   // [server] password=   the login's (--password); never log it
+    std::wstring server;     // [server] server=     default: play.soulspirexi.com
+    std::wstring user;       // [server] user=       the login's (--user); interactive prompt if omitted
+    std::wstring password;   // always empty from INI (plaintext [server] password= is refused for security)
+    bool plaintext_password_in_ini = false; // true when [server] password= was present in INI
     std::wstring login_version; // [server] loginversion= the version VanaCore's login reports (2.0.1);
                                 //                        default: its own, 2.1.2
 };

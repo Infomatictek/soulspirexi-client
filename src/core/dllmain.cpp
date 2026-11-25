@@ -257,7 +257,7 @@ extern "C" DWORD WINAPI VanaCoreInstall(LPVOID param)
     vanacore::gui::install(g_boot.install_dir, g_boot.settings_ini); // ImGui, before plugins and addons can use it ([client] imgui.font)
     vanacore::layout::install(g_boot.install_dir); // where their windows were moved to (config\layout.json)
     vanacore::graphics::install(g_boot.settings_ini, g_boot.install_dir); // before overlay: Direct3DCreate8
-    vanacore::overlay::install(g_boot.settings_ini, name, name + L" - CatsEyeXI",
+    vanacore::overlay::install(g_boot.settings_ini, name, L"SoulspireXI Client (based on " + name + L")",
                                std::wstring(g_boot.install_dir) + L"\\addons\\vanacore\\vana\\logo.png",
                                std::wstring(g_boot.install_dir) + L"\\VanaCore.exe");
     vanacore::addons::install(g_boot.install_dir, g_boot.settings_ini);

@@ -829,17 +829,17 @@ local function pivot_root()
     return root
 end
 
--- [pivot.order]'s overlays, lowest number first, without catseyexi: the server's own (the DATs for its custom
--- content), which VanaCore uses first whenever the pivot folder has it, listed or not (true as the second value).
+-- [pivot.order]'s overlays, lowest number first, without soulspirexi: the server's own (the DATs for its custom
+-- content), which the client uses first whenever the pivot folder has it, listed or not (true as the second value).
 local function pivot_order()
     local order = {}
     for n = 0, 99 do
         local name = ini_value('pivot.order', tostring(n))
-        if name ~= nil and name ~= '' and name:lower():gsub('[\\/]+$', '') ~= 'catseyexi' then
+        if name ~= nil and name ~= '' and name:lower():gsub('[\\/]+$', '') ~= 'soulspirexi' then
             order[#order + 1] = name
         end
     end
-    return order, vana.fs.is_dir(pivot_root() .. '\\catseyexi') == true
+    return order, vana.fs.is_dir(pivot_root() .. '\\soulspirexi') == true
 end
 
 -- A folder laid out like the FFXI folder: a ROM folder (ROM, ROM2 ...), a sound folder (sound,
@@ -866,12 +866,12 @@ local function find_overlays(root, relative, depth, found)
 end
 
 -- The overlays: those in [pivot.order], in its order, and the pivot folder's others (a folder of
--- them, as ffxi-maps' sizes, gives each); and whether catseyexi is in use, before them. The folder is
+-- them, as ffxi-maps' sizes, gives each); and whether soulspirexi is in use, before them. The folder is
 -- looked at afresh each time: a new overlay shows on Refresh.
 local function pivot_overlays()
     local root = pivot_root()
     local on, server = pivot_order()
-    local listed, off = { catseyexi = true }, {}
+    local listed, off = { soulspirexi = true }, {}
     for _, name in ipairs(on) do
         listed[name:lower():gsub('/', '\\')] = true
     end
@@ -883,11 +883,11 @@ local function pivot_overlays()
     return on, off, root, server
 end
 
--- [pivot.order] written afresh from `order` (0 first), catseyexi first when the pivot folder has it.
+-- [pivot.order] written afresh from `order` (0 first), soulspirexi first when the pivot folder has it.
 local function write_order(order)
     local _, server = pivot_order()
     if server then
-        table.insert(order, 1, 'catseyexi')
+        table.insert(order, 1, 'soulspirexi')
     end
     for n = 0, 99 do
         if vana.config.get('pivot.order', tostring(n)) ~= nil then
@@ -3086,7 +3086,7 @@ local TABS = {
             return {
                 -- (its heading not drawn: the banner says it; a search still shows it. vana.lua's draw_section)
                 (function (row) row.bare = true return row end)(header('VanaCore')),
-                banner('A modern launcher and client for FINAL FANTASY XI.'),
+                banner('SoulspireXI experimental client (based on VanaCore).'),
                 subheader('Info'),
                 -- the version first, its value larger (big: vana.lua's info row); Window scale after it
                 (function (row) row.big = true return row end)(info('Version', function () return 'v' .. tostring(vana.version) end)),

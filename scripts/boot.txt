@@ -27,6 +27,7 @@
 # /addon load distanceplus
 # /addon load tparty
 
-# VanaCore's own addons (keybinds and the /vana window are always loaded)
-/addon load freecam vanacore
-/addon load loadscreen vanacore
+# Minimal SoulspireXI experimental runtime boot script:
+# Soulspire Native, Soulspire Core, custom weapon presentation, and optional addons remain disabled initially.
+# /addon load freecam vanacore
+# /addon load loadscreen vanacore

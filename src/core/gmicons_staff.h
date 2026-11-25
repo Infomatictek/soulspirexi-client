@@ -8,13 +8,6 @@ struct Staff {
     Icon icon;
 };
 
-constexpr Staff kCatsEyeXI[] = {
-    {"Vekien", kDev},
-    {"Carver", kAdmin},
-    {"Box", kSgm},
-    {"Rumham", kSgm},
-};
-
 struct ServerStaff {
     const char* host;
     const Staff* staff;
@@ -22,5 +15,5 @@ struct ServerStaff {
 };
 
 constexpr ServerStaff kGmList[] = {
-    {"server.catseyexi.com", kCatsEyeXI, std::size(kCatsEyeXI)},
+    {"play.soulspirexi.com", nullptr, 0},
 };

@@ -149,6 +149,31 @@ jobs:
           if (Test-Path -LiteralPath (Join-Path $stage 'dlss\nvngx_dlssnr.dll')) {
             throw "Forbidden NVIDIA DLSS 5 binary (nvngx_dlssnr.dll) found in package"
           }
+          if (Test-Path -LiteralPath 'vanacore.soulspire-minimal.ini') {
+            $settingsHpp = Get-Content -LiteralPath 'src\launcher\settings.hpp' -Raw
+            if ($settingsHpp -match 'server\.catseyexi\.com') {
+              throw "Compliance failure: server.catseyexi.com still present in src/launcher/settings.hpp"
+            }
+            $discordCpp = Get-Content -LiteralPath 'src\core\discord.cpp' -Raw
+            if ($discordCpp -match '1560327334966337547') {
+              throw "Compliance failure: CatsEyeXI Discord App ID still present in src/core/discord.cpp"
+            }
+            foreach ($forbiddenArt in @('addons\vanacore\vana\banner.png', 'assets\banner.png', 'assets\logo_text.png', 'assets\logo_text_transparent.png')) {
+              if (Test-Path -LiteralPath $forbiddenArt) {
+                throw "GPL Section 7 Term 4 failure: proprietary artwork still present at $forbiddenArt"
+              }
+            }
+            $stagedMinimal = Join-Path $stage 'vanacore.soulspire-minimal.ini'
+            if (-not (Test-Path -LiteralPath $stagedMinimal)) {
+              throw "Missing staged vanacore.soulspire-minimal.ini"
+            }
+            # Smoke-verify CLI --password refusal (must exit non-zero without launching)
+            $proc = Start-Process -FilePath (Join-Path $stage 'VanaCore.exe') -ArgumentList '--user','ci_test','--password','forbidden_plaintext' -Wait -PassThru -NoNewWindow
+            if ($proc.ExitCode -eq 0) {
+              throw "Security regression: VanaCore.exe accepted plaintext --password CLI argument!"
+            }
+            Write-Host "SoulspireXI branding, GPL Section 7 Term 4, and credential security checks passed (CLI --password exit=$($proc.ExitCode))."
+          }
           Write-Host "Validated $($required.Count) required package and license files."
 
       - name: Generate dependency inventory, build provenance, SHA-256 checksums, and ZIP archives

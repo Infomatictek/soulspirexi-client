@@ -25,10 +25,10 @@
 namespace vanacore::discord {
 namespace {
 
-// CatsEyeXI's Discord application, the game the profile shows as playing, with its art "logo"
-constexpr char kAppId[] = "1560327334966337547";
-constexpr char kArt[] = "logo";          // the application's art the activity shows
-constexpr char kArtText[] = "CatsEyeXI"; // what resting the mouse on it says
+// SoulspireXI: disabled by default until a SoulspireXI Discord application ID is explicitly configured.
+constexpr char kAppId[] = "";
+constexpr char kArt[] = "logo";
+constexpr char kArtText[] = "SoulspireXI";
 constexpr ULONGLONG kReadMs = 2000;      // how often the game is read while Discord is there
 constexpr ULONGLONG kIdleReadMs = 15000; // and while it isn't: who is logged in, for the start time
 constexpr ULONGLONG kMinSendMs = 5000;   // between activities: Discord takes about 5 in 20 s
@@ -423,8 +423,8 @@ void reload(const wchar_t* ini)
         return;
     Settings settings;
     const bool file = ini != nullptr && ini[0] != L'\0';
-    // on unless the player turns it off ([discord] enabled=0); with no vanacore.ini too
-    settings.enabled = !file || GetPrivateProfileIntW(L"discord", L"enabled", 1, ini) != 0;
+    // Disabled by default in SoulspireXI minimal client and whenever no Discord application ID is configured.
+    settings.enabled = kAppId[0] != '\0' && file && GetPrivateProfileIntW(L"discord", L"enabled", 0, ini) != 0;
     settings.name = !file || GetPrivateProfileIntW(L"discord", L"name", 1, ini) != 0;
     {
         const std::lock_guard lock(g_lock);
