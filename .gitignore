@@ -34,6 +34,7 @@ amd_fidelityfx_*.dll
 /vanacore.ini
 /vanacore.*.ini
 !/vanacore.example.ini
+!/vanacore.soulspire-minimal.ini
 /logs/
 /config/
 *.log
