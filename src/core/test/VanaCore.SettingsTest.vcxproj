@@ -53,11 +53,14 @@
     <ClCompile Include="settings_test.cpp" />
     <ClCompile Include="..\ini.cpp" />
     <ClCompile Include="..\settings.cpp" />
+    <ClCompile Include="..\..\launcher\login.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\ini.hpp" />
     <ClInclude Include="..\settings.hpp" />
     <ClInclude Include="..\log.hpp" />
+    <ClInclude Include="..\..\launcher\login.hpp" />
+    <ClInclude Include="..\..\shared\vanacore\tls_client.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

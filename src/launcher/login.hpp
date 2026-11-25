@@ -9,11 +9,11 @@ namespace vanacore::login {
 // A bootloader version, as the login server checks it (major.minor).
 using Version = std::array<int, 3>;
 
-// The version VanaCore reports: xiloader 2.1.2's protocol. A LandSandBoat login server wants 2.1.x
-// from 2026-02-12 (before, 2.0.x; from 2026-09-27, 2.2.x).
-inline constexpr Version kVersion = {2, 1, 2};
+// The version VanaCore reports: LandSandBoat xiloader 3.0.0 protocol (TLS 1.3 auth + TLS 1.3 lobby).
+// Override via [server] loginversion= only if connecting to a legacy server.
+inline constexpr Version kVersion = {3, 0, 0};
 
-// "2.0.1" (or "2.0", its patch 0) as a version; false if it isn't one (each part 0-255).
+// "3.0.0" (or "3.0", its patch 0) as a version; false if it isn't one (each part 0-255).
 bool parse_version(const std::wstring& text, Version& version);
 
 enum class Outcome {
@@ -22,11 +22,26 @@ enum class Outcome {
     ServerProblem, // it couldn't be reached, or its reply made no sense
 };
 
+enum class ErrorCategory {
+    None,
+    DnsFailed,
+    TcpConnectFailed,
+    TlsInitFailed,
+    TlsHandshakeFailed,
+    ServerKeyMismatch,
+    ProtocolError,
+    AuthRefused,
+};
+
 struct Result {
     Outcome outcome = Outcome::ServerProblem;
+    ErrorCategory error_category = ErrorCategory::None;
     std::wstring message; // for the player when it isn't LoggedIn
+    std::wstring tls_protocol;
     std::uint32_t account_id = 0;
     std::uint8_t session_hash[16] = {};
+    bool has_server_key = false;
+    std::uint8_t server_key_sha256[32] = {};
 };
 
 // Resolves `server` (a host name or an IPv4 address) into `address` (network byte order); false,

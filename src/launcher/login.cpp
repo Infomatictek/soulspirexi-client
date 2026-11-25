@@ -1,24 +1,14 @@
 #include "login.hpp"
 
-#define SECURITY_WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
-
-#include <schannel.h>
-#include <security.h>
+#include "../shared/vanacore/tls_client.hpp"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
-
-#pragma comment(lib, "ws2_32.lib")
-#pragma comment(lib, "secur32.lib")
 
 namespace vanacore::login {
 namespace {
@@ -340,226 +330,26 @@ bool whole_object(std::string_view text)
     return false;
 }
 
-// --- TLS over a socket, through Windows' own Schannel --------------------------------------------
+// --- TLS transport is shared with VanaCore.Core (src/shared/vanacore/tls_client.hpp) -------------
 
-class Tls {
-public:
-    ~Tls()
-    {
-        if (have_context_)
-            DeleteSecurityContext(&context_);
-        if (have_credentials_)
-            FreeCredentialsHandle(&credentials_);
-        if (socket_ != INVALID_SOCKET)
-            closesocket(socket_);
+ErrorCategory map_tls_error(vanacore::tls::ErrorKind kind)
+{
+    switch (kind) {
+    case vanacore::tls::ErrorKind::SocketFailed:
+    case vanacore::tls::ErrorKind::TcpConnectFailed:
+        return ErrorCategory::TcpConnectFailed;
+    case vanacore::tls::ErrorKind::TlsInitFailed:
+        return ErrorCategory::TlsInitFailed;
+    case vanacore::tls::ErrorKind::TlsHandshakeFailed:
+        return ErrorCategory::TlsHandshakeFailed;
+    case vanacore::tls::ErrorKind::ServerKeyMismatch:
+        return ErrorCategory::ServerKeyMismatch;
+    case vanacore::tls::ErrorKind::IoFailed:
+    case vanacore::tls::ErrorKind::None:
+    default:
+        return ErrorCategory::ProtocolError;
     }
-
-    // Connects and completes the handshake; false with the reason in `error`. `protocols` are the TLS
-    // versions to offer (SP_PROT_*_CLIENT), 0 for Windows' default.
-    bool connect(std::uint32_t address, std::uint16_t port, const std::wstring& host, DWORD protocols,
-                 std::wstring& error)
-    {
-        socket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (socket_ == INVALID_SOCKET) {
-            error = L"couldn't make a socket (winsock error " + std::to_wstring(WSAGetLastError()) + L")";
-            return false;
-        }
-        const DWORD timeout = kTimeoutMs;
-        setsockopt(socket_, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
-        setsockopt(socket_, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
-        sockaddr_in to{};
-        to.sin_family = AF_INET;
-        to.sin_port = htons(port);
-        to.sin_addr.s_addr = address;
-        if (::connect(socket_, reinterpret_cast<const sockaddr*>(&to), sizeof(to)) == SOCKET_ERROR) {
-            error = L"couldn't connect (winsock error " + std::to_wstring(WSAGetLastError()) + L")";
-            return false;
-        }
-        connected_ = true;
-
-        // The server's certificate is self-signed: it isn't checked, as xiloader doesn't.
-        SCHANNEL_CRED settings{};
-        settings.dwVersion = SCHANNEL_CRED_VERSION;
-        settings.grbitEnabledProtocols = protocols;
-        settings.dwFlags = SCH_CRED_MANUAL_CRED_VALIDATION | SCH_CRED_NO_DEFAULT_CREDS | SCH_USE_STRONG_CRYPTO;
-        SECURITY_STATUS status = AcquireCredentialsHandleW(nullptr, const_cast<wchar_t*>(UNISP_NAME_W),
-                                                           SECPKG_CRED_OUTBOUND, nullptr, &settings, nullptr, nullptr,
-                                                           &credentials_, nullptr);
-        if (status != SEC_E_OK) {
-            error = L"Windows' TLS wouldn't start (" + hex(static_cast<unsigned long>(status)) + L")";
-            return false;
-        }
-        have_credentials_ = true;
-        host_ = host;
-        return handshake({}, error);
-    }
-
-    // True once the socket connected (a failed connect() got as far as TLS)
-    bool connected() const { return connected_; }
-
-    bool send_all(const char* data, size_t size)
-    {
-        while (size > 0) {
-            const int sent = ::send(socket_, data, static_cast<int>(size), 0);
-            if (sent <= 0)
-                return false;
-            data += sent;
-            size -= static_cast<size_t>(sent);
-        }
-        return true;
-    }
-
-    bool write(const std::string& message)
-    {
-        if (message.size() > sizes_.cbMaximumMessage)
-            return false;
-        std::vector<char> record(sizes_.cbHeader + message.size() + sizes_.cbTrailer);
-        std::memcpy(record.data() + sizes_.cbHeader, message.data(), message.size());
-        SecBuffer buffers[4] = {
-            {sizes_.cbHeader, SECBUFFER_STREAM_HEADER, record.data()},
-            {static_cast<unsigned long>(message.size()), SECBUFFER_DATA, record.data() + sizes_.cbHeader},
-            {sizes_.cbTrailer, SECBUFFER_STREAM_TRAILER, record.data() + sizes_.cbHeader + message.size()},
-            {0, SECBUFFER_EMPTY, nullptr},
-        };
-        SecBufferDesc description{SECBUFFER_VERSION, 4, buffers};
-        if (EncryptMessage(&context_, 0, &description, 0) != SEC_E_OK)
-            return false;
-        return send_all(record.data(), buffers[0].cbBuffer + buffers[1].cbBuffer + buffers[2].cbBuffer);
-    }
-
-    // Reads until `done` says the text read so far is complete; false if the connection ends or
-    // times out first, or TLS fails (the reason in `error`).
-    template <typename Done>
-    bool read(std::string& text, Done done, std::wstring& error)
-    {
-        while (!done(text)) {
-            if (!incoming_.empty()) {
-                SecBuffer buffers[4] = {
-                    {static_cast<unsigned long>(incoming_.size()), SECBUFFER_DATA, incoming_.data()},
-                    {0, SECBUFFER_EMPTY, nullptr},
-                    {0, SECBUFFER_EMPTY, nullptr},
-                    {0, SECBUFFER_EMPTY, nullptr},
-                };
-                SecBufferDesc description{SECBUFFER_VERSION, 4, buffers};
-                const SECURITY_STATUS status = DecryptMessage(&context_, &description, 0, nullptr);
-                if (status == SEC_E_OK || status == SEC_I_RENEGOTIATE || status == SEC_I_CONTEXT_EXPIRED) {
-                    std::vector<char> extra;
-                    for (const SecBuffer& buffer : buffers) {
-                        if (buffer.BufferType == SECBUFFER_DATA && buffer.cbBuffer > 0)
-                            text.append(static_cast<const char*>(buffer.pvBuffer), buffer.cbBuffer);
-                        else if (buffer.BufferType == SECBUFFER_EXTRA && buffer.cbBuffer > 0)
-                            extra.assign(static_cast<const char*>(buffer.pvBuffer),
-                                         static_cast<const char*>(buffer.pvBuffer) + buffer.cbBuffer);
-                    }
-                    incoming_ = std::move(extra);
-                    if (status == SEC_I_CONTEXT_EXPIRED)
-                        break; // the server closed the TLS session
-                    // TLS 1.3's messages after the handshake (session tickets) come as a renegotiation
-                    if (status == SEC_I_RENEGOTIATE) {
-                        std::vector<char> input = std::move(incoming_);
-                        incoming_.clear();
-                        if (!handshake(std::move(input), error))
-                            return false;
-                    }
-                    continue;
-                }
-                if (status != SEC_E_INCOMPLETE_MESSAGE) {
-                    error = L"TLS failed reading the reply (" + hex(static_cast<unsigned long>(status)) + L")";
-                    return false;
-                }
-            }
-            if (!receive())
-                break;
-        }
-        return done(text);
-    }
-
-private:
-    // Appends what the socket has to incoming_; false when it's closed, timed out or failed.
-    bool receive()
-    {
-        char chunk[16384];
-        const int received = recv(socket_, chunk, sizeof(chunk), 0);
-        if (received <= 0)
-            return false;
-        incoming_.insert(incoming_.end(), chunk, chunk + received);
-        return true;
-    }
-
-    // Runs InitializeSecurityContext until the handshake is done, starting from `input` (tokens
-    // already read; empty to start a new handshake).
-    bool handshake(std::vector<char> input, std::wstring& error)
-    {
-        constexpr DWORD kFlags = ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT | ISC_REQ_CONFIDENTIALITY |
-                                 ISC_REQ_EXTENDED_ERROR | ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM |
-                                 ISC_REQ_MANUAL_CRED_VALIDATION;
-        incoming_ = std::move(input);
-        bool first = !have_context_;
-        for (;;) {
-            if (!first && incoming_.empty() && !receive()) {
-                error = L"the connection closed during the TLS handshake";
-                return false;
-            }
-            SecBuffer in[2] = {
-                {static_cast<unsigned long>(incoming_.size()), SECBUFFER_TOKEN, incoming_.empty() ? nullptr : incoming_.data()},
-                {0, SECBUFFER_EMPTY, nullptr},
-            };
-            SecBufferDesc in_description{SECBUFFER_VERSION, 2, in};
-            SecBuffer out[1] = {{0, SECBUFFER_TOKEN, nullptr}};
-            SecBufferDesc out_description{SECBUFFER_VERSION, 1, out};
-            DWORD got = 0;
-            SECURITY_STATUS status = InitializeSecurityContextW(
-                &credentials_, first ? nullptr : &context_, const_cast<wchar_t*>(host_.c_str()), kFlags, 0, 0,
-                first ? nullptr : &in_description, 0, &context_, &out_description, &got, nullptr);
-            if (first) {
-                if (status == SEC_I_CONTINUE_NEEDED || status == SEC_E_OK)
-                    have_context_ = true;
-                first = false;
-            }
-            if (status == SEC_E_INCOMPLETE_MESSAGE) {
-                if (!receive()) {
-                    error = L"the connection closed during the TLS handshake";
-                    return false;
-                }
-                continue;
-            }
-            if (out[0].cbBuffer > 0 && out[0].pvBuffer != nullptr) {
-                const bool sent = send_all(static_cast<const char*>(out[0].pvBuffer), out[0].cbBuffer);
-                FreeContextBuffer(out[0].pvBuffer);
-                if (!sent) {
-                    error = L"couldn't send the TLS handshake";
-                    return false;
-                }
-            }
-            if (status != SEC_E_OK && status != SEC_I_CONTINUE_NEEDED) {
-                error = L"the TLS handshake failed (" + hex(static_cast<unsigned long>(status)) + L")";
-                return false;
-            }
-            // what the server sent past the handshake's last token stays for the next read
-            if (in[1].BufferType == SECBUFFER_EXTRA && in[1].cbBuffer > 0)
-                incoming_.erase(incoming_.begin(), incoming_.end() - in[1].cbBuffer);
-            else
-                incoming_.clear();
-            if (status == SEC_E_OK)
-                break;
-        }
-        if (QueryContextAttributesW(&context_, SECPKG_ATTR_STREAM_SIZES, &sizes_) != SEC_E_OK) {
-            error = L"TLS gave no record sizes";
-            return false;
-        }
-        return true;
-    }
-
-    SOCKET socket_ = INVALID_SOCKET;
-    bool connected_ = false;
-    CredHandle credentials_{};
-    CtxtHandle context_{};
-    bool have_credentials_ = false;
-    bool have_context_ = false;
-    std::wstring host_;
-    SecPkgContext_StreamSizes sizes_{};
-    std::vector<char> incoming_; // encrypted bytes not decrypted yet
-};
+}
 
 struct Winsock {
     bool ready = false;
@@ -634,41 +424,37 @@ Result log_in(const std::wstring& server, std::uint32_t address, std::uint16_t p
     }
     const std::wstring where = server + L":" + std::to_wstring(port);
 
-    // Windows 7's TLS offers only 1.0 unless asked for more (1.1 and 1.2 are off by default for
-    // clients there) and the server takes 1.2 and up, refusing it (0x80090302): a handshake that
-    // fails is tried again on a new connection, asking for 1.2
-    std::optional<Tls> tls;
-    tls.emplace();
+    vanacore::tls::Client tls;
     std::wstring error;
-    bool connected = tls->connect(address, port, server, 0, error);
-    if (!connected && tls->connected()) {
-        std::wstring first = std::move(error);
-        tls.emplace();
-        error.clear();
-        connected = tls->connect(address, port, server, SP_PROT_TLS1_2_CLIENT, error);
-        if (!connected)
-            error = first + L"; asking for TLS 1.2, " + error;
-    }
-    if (!connected) {
+    if (!tls.connect(address, port, server, error, nullptr, kTimeoutMs)) {
+        result.error_category = map_tls_error(tls.error_kind());
         result.message = L"Couldn't reach the login server at " + where + L": " + error + L".";
         return result;
+    }
+    if (tls.negotiated_protocol() != 0)
+        result.tls_protocol = vanacore::tls::protocol_name(tls.negotiated_protocol());
+    if (tls.has_peer_key()) {
+        result.has_server_key = true;
+        std::memcpy(result.server_key_sha256, tls.peer_key_sha256().data(), sizeof(result.server_key_sha256));
     }
 
     std::string request = "{\"command\":" + std::to_string(kLoginCommand) + ",\"username\":" + json_string(utf8(user)) +
                           ",\"password\":" + json_string(utf8(password)) + ",\"otp\":\"\",\"new_password\":\"\"" +
-                          // 2.1's trusted computer (skipping one-time passwords, which VanaCore doesn't use)
+                          // Trusted computer fields (xiloader 2.1+ / 3.0.x protocol)
                           ",\"trust_token\":\"\",\"trust_this_computer\":false" +
                           ",\"version\":[" + std::to_string(version[0]) + "," + std::to_string(version[1]) + "," +
                           std::to_string(version[2]) + "]}";
-    const bool sent = tls->write(request);
+    const bool sent = tls.write(request);
     SecureZeroMemory(request.data(), request.size());
     if (!sent) {
+        result.error_category = ErrorCategory::ProtocolError;
         result.message = L"Couldn't send the login to " + where + L".";
         return result;
     }
 
     std::string reply;
-    if (!tls->read(reply, [](const std::string& text) { return whole_object(text); }, error)) {
+    if (!tls.read_until(reply, [](const std::string& text) { return whole_object(text); }, error)) {
+        result.error_category = ErrorCategory::ProtocolError;
         result.message = reply.empty() ? L"The login server at " + where + L" didn't reply" +
                                              (error.empty() ? L"" : L" (" + error + L")") + L"."
                                        : L"The login server's reply made no sense.";
@@ -676,6 +462,7 @@ Result log_in(const std::wstring& server, std::uint32_t address, std::uint16_t p
     }
     Value json;
     if (!Parser(reply).parse(json) || json.type != Value::Type::Object) {
+        result.error_category = ErrorCategory::ProtocolError;
         result.message = L"The login server's reply made no sense.";
         return result;
     }
@@ -684,11 +471,13 @@ Result log_in(const std::wstring& server, std::uint32_t address, std::uint16_t p
     if (const Value* message = json.member("error_message");
         message != nullptr && message->type == Value::Type::String && !message->text.empty()) {
         result.outcome = Outcome::Refused;
+        result.error_category = ErrorCategory::AuthRefused;
         result.message = wide(message->text);
         return result;
     }
     const Value* code = json.member("result");
     if (code == nullptr || code->type != Value::Type::Number) {
+        result.error_category = ErrorCategory::ProtocolError;
         result.message = L"The login server's reply had no result.";
         return result;
     }
@@ -698,6 +487,7 @@ Result log_in(const std::wstring& server, std::uint32_t address, std::uint16_t p
         const Value* hash = json.member("session_hash");
         if (id == nullptr || id->type != Value::Type::Number || hash == nullptr || hash->type != Value::Type::Array ||
             hash->items.size() != sizeof(result.session_hash)) {
+            result.error_category = ErrorCategory::ProtocolError;
             result.message = L"The login server accepted the login but sent no account or session.";
             return result;
         }
@@ -705,26 +495,32 @@ Result log_in(const std::wstring& server, std::uint32_t address, std::uint16_t p
         for (size_t i = 0; i < hash->items.size(); ++i)
             result.session_hash[i] = static_cast<std::uint8_t>(static_cast<int>(hash->items[i].number) & 0xFF);
         result.outcome = Outcome::LoggedIn;
+        result.error_category = ErrorCategory::None;
         return result;
     }
     case kResultWrongPassword:
         result.outcome = Outcome::Refused;
+        result.error_category = ErrorCategory::AuthRefused;
         result.message = L"Wrong username or password.";
         return result;
     case kResultFail:
         result.outcome = Outcome::Refused;
+        result.error_category = ErrorCategory::AuthRefused;
         result.message = L"This account can't log in (it doesn't exist, or it's suspended).";
         return result;
     case kResultAlreadyLoggedIn:
         result.outcome = Outcome::Refused;
+        result.error_category = ErrorCategory::AuthRefused;
         result.message = L"This account is already logged in.";
         return result;
     case kResultVersionUnsupported:
         result.outcome = Outcome::Refused;
-        result.message = L"The server doesn't support this VanaCore's login. Update VanaCore.";
+        result.error_category = ErrorCategory::AuthRefused;
+        result.message = L"The server doesn't support this SoulspireXI Client login protocol version.";
         return result;
     default:
         result.outcome = Outcome::Refused;
+        result.error_category = ErrorCategory::AuthRefused;
         result.message = L"The login server refused the login (code " + std::to_wstring(static_cast<int>(code->number)) +
                          L").";
         return result;
