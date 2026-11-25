@@ -116,6 +116,7 @@ vanacore::tls::Client g_data_tls;               // the lobby's TLS 1.3 data link
 SOCKET g_view_relay = INVALID_SOCKET;           // local loopback TLS 1.3 relay listener for lobby view (54001)
 std::uint16_t g_view_relay_port = 0;            // ephemeral loopback port for lobby view TLS 1.3 relay
 SOCKET g_profile = INVALID_SOCKET;              // the stand-in profile server's listener
+std::uint16_t g_profile_port = 0;               // ephemeral loopback port for stand-in profile server
 char g_server[INET_ADDRSTRLEN] = {};            // the server's address, dotted
 std::wstring g_server_host;                     // the server's hostname for TLS SNI
 
@@ -241,10 +242,10 @@ int WINAPI connect_traced(SOCKET socket, const sockaddr* to, int length)
     sockaddr_in redirected{};
     const sockaddr* actual_to = to;
     int actual_length = length;
-    if (g_login.lobby_tls != 0 && g_view_relay_port != 0 && to != nullptr &&
-        length >= static_cast<int>(sizeof(sockaddr_in)) && to->sa_family == AF_INET) {
+    if (to != nullptr && length >= static_cast<int>(sizeof(sockaddr_in)) && to->sa_family == AF_INET) {
         const auto* in = reinterpret_cast<const sockaddr_in*>(to);
-        if (in->sin_addr.s_addr == g_login.server_address && ntohs(in->sin_port) == g_login.view_port) {
+        if (g_login.lobby_tls != 0 && g_view_relay_port != 0 && in->sin_addr.s_addr == g_login.server_address &&
+            ntohs(in->sin_port) == g_login.view_port) {
             redirected = *in;
             redirected.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
             redirected.sin_port = htons(g_view_relay_port);
@@ -253,6 +254,15 @@ int WINAPI connect_traced(SOCKET socket, const sockaddr* to, int length)
             if (tracing())
                 log::write(L"Lobby: redirecting view port %u through local TLS 1.3 relay (127.0.0.1:%u)",
                            g_login.view_port, g_view_relay_port);
+        } else if (g_profile_port != 0 && in->sin_addr.s_addr == htonl(INADDR_LOOPBACK) &&
+                   ntohs(in->sin_port) == 51220) {
+            redirected = *in;
+            redirected.sin_port = htons(g_profile_port);
+            actual_to = reinterpret_cast<const sockaddr*>(&redirected);
+            actual_length = static_cast<int>(sizeof(redirected));
+            if (tracing())
+                log::write(L"Profile: redirecting 127.0.0.1:51220 to stand-in profile server (127.0.0.1:%u)",
+                           g_profile_port);
         }
     }
     const int result = g_connect(socket, actual_to, actual_length);
@@ -726,13 +736,12 @@ bool prepare_polcore(HMODULE polcore, Command* table, std::uint16_t profile_port
     const std::uintptr_t mutex_site = scan::find(polcore, "8B 56 2C 8B 46 28 8B 4E 24 52 50 51");
     // Its connection object: cleared, with a buffer of its own for what it encrypts
     const std::uintptr_t connection_site = scan::find(polcore, "81 C6 38 03 00 00 83 C4 04 81 FE");
-    // The profile server's port (51220) in its two places: this machine's stand-in instead
+    // The profile server's port (51220) in its two places (optional: connect_traced also redirects 127.0.0.1:51220 -> g_profile_port)
     const std::uintptr_t port_site = scan::find(polcore, "66 C7 46 26 14 C8 88 46 09 8D 46 24");
     const std::uintptr_t port_site2 = scan::find(polcore, "66 C7 05 BA 4A ?? ?? 14 C8");
-    if (mutex_site == 0 || connection_site == 0 || port_site == 0 || port_site2 == 0) {
-        report(L"this PlayOnline (polcore) isn't one VanaCore knows (not found:%ls%ls%ls%ls)",
-               mutex_site == 0 ? L" lock" : L"", connection_site == 0 ? L" connection" : L"",
-               port_site == 0 ? L" profile port" : L"", port_site2 == 0 ? L" profile port 2" : L"");
+    if (mutex_site == 0 || connection_site == 0) {
+        report(L"this PlayOnline (polcore) isn't one VanaCore knows (not found:%ls%ls)",
+               mutex_site == 0 ? L" lock" : L"", connection_site == 0 ? L" connection" : L"");
         return false;
     }
 
@@ -763,10 +772,15 @@ bool prepare_polcore(HMODULE polcore, Command* table, std::uint16_t profile_port
         table[kSetMessageText](kNameUnavailable, "The name you entered is unavailable.\nPlease choose another name.");
     table[kInetMutex]();
 
-    if (!patch16(port_site + 4, profile_port) || !patch16(port_site2 + 7, profile_port)) {
-        report(L"couldn't point PlayOnline at the profile server (error %lu)", GetLastError());
-        return false;
-    }
+    if (port_site != 0 && !patch16(port_site + 4, profile_port))
+        log::write(L"Profile: couldn't patch polcore profile port 1 (error %lu); connect() hook will redirect 127.0.0.1:51220 -> %u",
+                   GetLastError(), profile_port);
+    if (port_site2 != 0 && !patch16(port_site2 + 7, profile_port))
+        log::write(L"Profile: couldn't patch polcore profile port 2 (error %lu); connect() hook will redirect 127.0.0.1:51220 -> %u",
+                   GetLastError(), profile_port);
+    if (port_site == 0 || port_site2 == 0)
+        log::write(L"Profile: polcore profile port signature(s) absent on this retail polcore.dll; using Winsock connect() redirect 127.0.0.1:51220 -> %u",
+                   profile_port);
     return true;
 }
 
@@ -846,6 +860,7 @@ int run_game(const BootInfo& boot)
             report(L"couldn't open PlayOnline's profile server on this machine (winsock error %d)", WSAGetLastError());
             break;
         }
+        g_profile_port = profile_port;
         data_thread = CreateThread(nullptr, 0, &data_link, nullptr, 0, nullptr);
         profile_thread = CreateThread(nullptr, 0, &profile_server, nullptr, 0, nullptr);
         log::write(L"Game start: lobby data link open; profile server on port %u", profile_port);
@@ -931,6 +946,7 @@ int run_game(const BootInfo& boot)
         closesocket(g_profile);
         g_profile = INVALID_SOCKET;
     }
+    g_profile_port = 0;
     for (HANDLE thread : {data_thread, profile_thread, view_relay_thread})
         if (thread != nullptr) {
             WaitForSingleObject(thread, 1000);
