@@ -465,7 +465,7 @@ int retail_target(const vanacore::Settings& settings, const std::wstring& settin
     return 0;
 }
 
-// CatsEyeXI: vanacore.ini's bootloader, pointed at our server unless the caller picks one. 0, or the exit code.
+// SoulspireXI: vanacore.ini's bootloader, pointed at our server unless the caller picks one. 0, or the exit code.
 int bootloader_target(const vanacore::Settings& settings, const std::wstring& settings_ini, int argc, wchar_t** argv,
                       Target& target)
 {

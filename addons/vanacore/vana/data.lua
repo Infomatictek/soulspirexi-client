@@ -925,11 +925,11 @@ local function move_overlay(index, by)
 end
 
 -- An overlay's row: a folder, its name; in use, arrows to move it and a switch to take it out; not in
--- use, a switch to put it in (last). The server's own (catseyexi): a padlock, in its colour, locked on.
+-- use, a switch to put it in (last). The server's own (soulspirexi): a padlock, in its colour, locked on.
 local function overlay(name, on, index, count, server)
     if server then
         return { kind = 'overlay', label = name, name = name, on = true, server = true, icon = 'lock', colour = '#E5C07BFF',
-                 tip = "CatsEyeXI's own files: the DATs for the server's custom content.\nAlways on, and always first." }
+                 tip = "SoulspireXI's own files: the DATs for the server's custom content.\nAlways on, and always first." }
     end
     return { kind = 'overlay', label = name, name = name, on = on, index = index, count = count, icon = 'folder' }
 end
@@ -993,9 +993,9 @@ local function extension_rows(what)
     if loaded == nil then
         return { header(plural), note("This VanaCore can't say what is loaded: update it.") }
     end
-    -- first in their list whatever the name; keybinds (always on) and the ones CatsEyeXI requires have no switch
-    local first = { addon = { vana = 1, keybinds = 2, customcolors = 3 }, plugin = { cexidats = 1, cexislots = 2 } }
-    local fixed = { addon = { keybinds = true, customcolors = true }, plugin = { cexidats = true, cexislots = true } }
+    -- first in their list whatever the name; keybinds (always on) has no switch
+    local first = { addon = { vana = 1, keybinds = 2 }, plugin = {} }
+    local fixed = { addon = { keybinds = true }, plugin = {} }
     local wanted = query[what]:lower()
     local on, off = {}, {}
     for _, entry in ipairs(folder_extensions(what)) do
@@ -2583,7 +2583,7 @@ TIPS.rows = {
     ['client.items.equip.border.size'] = 'How thick the border is. 0: no border.',
     ['client.items.equip.wardrobe'] = 'The number on an equipped item that says which wardrobe it\'s in.',
     ['client.items.rarity.preset'] = 'Sets the four +1 to +4 colours below. You can still change each one after.\n'
-        .. 'CatsEyeXI: the game\'s usual grey, blue, gold, green.\n'
+        .. 'SoulspireXI Default: the game\'s usual grey, blue, gold, green.\n'
         .. 'Uncommon to Mythic: green, blue, gold, purple.\n'
         .. 'Classic MMO: green, blue, purple, orange.\n'
         .. 'Action RPG: blue, yellow, tan, green.\n'
@@ -2743,7 +2743,7 @@ TIPS.rows = {
     ['graphics.nameplates.hidepets'] = 'Hides the names over players\' pets.',
     ['graphics.nameplates.bazaar'] = 'Shows the bag icon by players with a bazaar.',
     ['graphics.nameplates.linkshell'] = 'Shows the linkshell pearl by names.',
-    ['graphics.nameplates.gm'] = "CatsEyeXI's staff icons in place of the game's GM icon, over names and in the Target window.",
+    ['graphics.nameplates.gm'] = "Server staff icons in place of the game's GM icon, over names and in the Target window.",
     ['graphics.nameplates.pearl.x'] = 'Moves the linkshell pearl right (closer to the name) or left.',
     ['graphics.nameplates.pearl.y'] = 'Moves the linkshell pearl down or up.',
     ['graphics.nameplates.pearl.shape'] = 'How wide the icons by names (linkshell pearl, bazaar bag, the game\'s GM icon) are against\n'
@@ -6124,7 +6124,7 @@ local TABS = {
                 (function ()
                     -- picking one writes the four colours below (which can then be changed one by one)
                     local row = choice('Colour preset', 'client', 'items.rarity.preset', 'game', {
-                        { 'game', 'CatsEyeXI' }, { 'mythic', 'Uncommon to Mythic' }, { 'mmo', 'Classic MMO' },
+                        { 'game', 'SoulspireXI Default' }, { 'mythic', 'Uncommon to Mythic' }, { 'mmo', 'Classic MMO' },
                         { 'arpg', 'Action RPG' }, { 'gw', 'Guild Wars style' }, { 'destiny', 'Destiny style' } })
                     row.changed = function ()
                         local colours = ({
@@ -6485,7 +6485,7 @@ local TABS = {
         buttons = { { 'Refresh', nil, 'refresh', 'Refresh: look at the folder again' } }, -- the tab built again: the folder looked at afresh
         rows = function ()
             local on, off, root, server = pivot_overlays()
-            -- the folder at the top, and what keeps the overlays (catseyexi's above all) from being used
+            -- the folder at the top, and what keeps the overlays (soulspirexi's above all) from being used
             local rows = { header('Folder'), info('Path', function () return root end) }
             local enabled = ini_value('pivot', 'enabled')
             if enabled == nil or enabled == '0' then
@@ -6494,12 +6494,12 @@ local TABS = {
             if not vana.fs.is_dir(root) then
                 rows[#rows + 1] = alert('Folder not found: no overlay is used')
             elseif not server then
-                rows[#rows + 1] = alert("No catseyexi folder in it: CatsEyeXI's own DATs (items, custom content) aren't used")
+                rows[#rows + 1] = alert("No soulspirexi folder in it: SoulspireXI's own DATs (items, custom content) aren't used")
             end
             rows[#rows + 1] = header('Overlays')
             rows[#rows + 1] = note('Top to bottom: the first with a file serves it. Applies from the next zone.')
             if server then
-                rows[#rows + 1] = overlay('catseyexi', true, nil, nil, true)
+                rows[#rows + 1] = overlay('soulspirexi', true, nil, nil, true)
             end
             for i, name in ipairs(on) do
                 local row = overlay(name, true, i, #on)
