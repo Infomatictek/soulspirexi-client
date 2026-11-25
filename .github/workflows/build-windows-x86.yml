@@ -88,8 +88,9 @@ jobs:
           $msbuild = "${{ steps.toolchain.outputs.msbuild }}"
           & $msbuild "VanaCore.sln" "-t:VanaCore_SettingsTest:Rebuild" -p:Configuration=Release -p:Platform=x86 -m -v:minimal -nologo
           if ($LASTEXITCODE -ne 0) { throw "VanaCore.SettingsTest build failed with exit code $LASTEXITCODE" }
-          $testExe = "build\Release\VanaCore.SettingsTest.exe"
-          if (-not (Test-Path -LiteralPath $testExe)) { throw "Missing $testExe" }
+          $testExe = "build\obj\VanaCore.SettingsTest\Release\VanaCore.SettingsTest.exe"
+          if (-not (Test-Path -LiteralPath $testExe)) { $testExe = "build\Release\VanaCore.SettingsTest.exe" }
+          if (-not (Test-Path -LiteralPath $testExe)) { throw "Missing VanaCore.SettingsTest.exe" }
           Write-Host "Running $testExe ..."
           & $testExe
           if ($LASTEXITCODE -ne 0) { throw "VanaCore.SettingsTest failed with exit code $LASTEXITCODE" }
