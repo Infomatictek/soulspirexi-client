@@ -112,6 +112,18 @@ void next_look()
     vanacore::settings::tick();
 }
 
+DWORD WINAPI plain_echo_server(void* p)
+{
+    SOCKET s = reinterpret_cast<SOCKET>(p);
+    SOCKET c = ::accept(s, nullptr, nullptr);
+    if (c != INVALID_SOCKET) {
+        const char junk[] = "NOT_TLS_PLAINTEXT_BANNER\r\n";
+        ::send(c, junk, static_cast<int>(sizeof(junk) - 1), 0);
+        closesocket(c);
+    }
+    return 0;
+}
+
 } // namespace
 
 int main()
@@ -353,19 +365,7 @@ int main()
             ::listen(plain_listener, 1) == 0 &&
             ::getsockname(plain_listener, reinterpret_cast<sockaddr*>(&plain_addr), &plain_len) == 0) {
             const std::uint16_t plain_port = ntohs(plain_addr.sin_port);
-            HANDLE srv = CreateThread(
-                nullptr, 0,
-                [](void* p) -> DWORD {
-                    SOCKET s = reinterpret_cast<SOCKET>(p);
-                    SOCKET c = ::accept(s, nullptr, nullptr);
-                    if (c != INVALID_SOCKET) {
-                        const char junk[] = "NOT_TLS_PLAINTEXT_BANNER\r\n";
-                        ::send(c, junk, static_cast<int>(sizeof(junk) - 1), 0);
-                        closesocket(c);
-                    }
-                    return 0;
-                },
-                reinterpret_cast<void*>(plain_listener), 0, nullptr);
+            HANDLE srv = CreateThread(nullptr, 0, &plain_echo_server, reinterpret_cast<void*>(plain_listener), 0, nullptr);
             const login::Result tls_res =
                 login::log_in(L"127.0.0.1", htonl(INADDR_LOOPBACK), plain_port, L"testuser", secret_pw);
             if (srv != nullptr) {
