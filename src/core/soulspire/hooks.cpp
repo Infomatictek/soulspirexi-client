@@ -2,9 +2,13 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <mutex>
+#include <new>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -12,6 +16,7 @@
 #include "../imports.hpp"
 #include "../log.hpp"
 #include "../scan.hpp"
+#include "commands_menu.hpp"
 #include "state.hpp"
 
 namespace vanacore::soulspire::hooks {
@@ -37,6 +42,11 @@ constexpr char kPatMenuSpellElig[]    = "E8 ?? ?? ?? ?? 83 C4 28 84 C0 75 09 5F 
 constexpr char kPatItemJobLabel[]     = "E8 ?? ?? ?? ?? 50 8D 4C 24 1C 68 ?? ?? ?? ?? 51 E8 ?? ?? ?? ?? 83 C4 14";
 constexpr char kPatFullJob1[]         = "E8 ?? ?? ?? ?? 83 C4 08 8D 54 24 1C 83 C6 04 50 52 56 8D 44 24 38 68 20";
 constexpr char kPatFullJob2[]         = "E8 ?? ?? ?? ?? 50 8D 44 24 20 83 C6 04 50 56 8D 4C 24 38 68 ?? ?? ?? ??";
+// Native Commands menu ("menu    menuwind") hooks #28-#31 (Status -> Soulspire -> Equipment).
+constexpr char kPatMenuWindRestoreCached[] = "E8 ?? ?? ?? ?? 83 7E 10 0E 74 24 8A 46 6E 84 C0 75 1D 8B 4E 0C 85 C9 0F";
+constexpr char kPatMenuWindRestoreFresh[]  = "E8 ?? ?? ?? ?? 8B 4E 0C 85 C9 74 05 8B 11 FF 52 04 8A 44 24 38 84 C0 74";
+constexpr char kPatMenuWindNextButton[]    = "E8 ?? ?? ?? ?? 8B F8 66 85 FF 0F 8C 84 01 00 00 57 8B CE E8";
+constexpr char kPatMenuWindKeyItem[]       = "0F BF 44 24 04 83 C0 FD 56 83 F8 19 8B F1 0F 87 CF 02 00 00 33 C9 8A 88";
 
 // Disambiguators for magic vs ability row name/desc/icon (both share similar surrounding code):
 // MagicRowName has `0x5D` (pop ebp) right after icon call; AbilityRowName does not.
@@ -106,6 +116,19 @@ struct CallPatch {
 using ActionIconFn   = void*(__cdecl*)(std::uint32_t, std::uint32_t);
 using CanShowSpellFn = std::uint8_t(__cdecl*)(const std::uint8_t*);
 using JobLookupFn    = const char*(__cdecl*)(int, int);
+using FfxiOpNewFn            = void*(__cdecl*)(std::uint32_t);
+using FfxiOpDeleteFn         = void(__cdecl*)(void*);
+using FfxiPlayConfirmSoundFn = void(__cdecl*)(void);
+using FfxiFrameUpdateBoxFn   = void(__fastcall*)(void*, void*, std::uint8_t);
+using FfxiBtnCtorFn          = void*(__fastcall*)(void*, void*, void*);
+using FfxiBtnInitFn          = void(__fastcall*)(void*, void*, const void*);
+using FfxiBtnRecalcRectFn    = void(__fastcall*)(void*, void*, std::int32_t, std::int32_t, std::uint8_t);
+using FfxiBtnUpdateSpriteFn  = void(__fastcall*)(void*, void*, std::uint8_t);
+using FfxiBtnSetStateFn      = void(__fastcall*)(void*, void*, std::uint32_t);
+using FfxiPrimSetSelectedFn  = void(__fastcall*)(void*, void*, std::int32_t);
+using FfxiListPushBackFn     = void(__fastcall*)(void*, void*, void*);
+using FfxiListRemoveNodeFn   = void(__fastcall*)(void*, void*, void*);
+using FfxiCloseMenuFn        = void(__fastcall*)(void*, void*, void*, std::int32_t);
 
 // Saved originals & call patches
 CallPatch g_magic_row_patch{};
@@ -122,6 +145,9 @@ CallPatch g_menu_spell_elig_patch{};
 CallPatch g_item_job_patch{};
 CallPatch g_full_job1_patch{};
 CallPatch g_full_job2_patch{};
+CallPatch g_menuwind_restore_cached_patch{};
+CallPatch g_menuwind_restore_fresh_patch{};
+CallPatch g_menuwind_next_button_patch{};
 
 std::uintptr_t g_orig_magic_name = 0;
 std::uintptr_t g_orig_magic_desc = 0;
@@ -139,6 +165,41 @@ std::uintptr_t g_missing_spell_resume = 0;
 JobLookupFn    g_orig_item_job = nullptr;
 JobLookupFn    g_orig_full_job1 = nullptr;
 JobLookupFn    g_orig_full_job2 = nullptr;
+
+// Native Commands menu ("menu    menuwind") state & callees (Hooks #28-#31).
+std::uintptr_t         g_orig_restore_saved_cursor = 0;
+std::uintptr_t         g_orig_get_next_button = 0;
+std::uintptr_t         g_menuwind_key_item_resume = 0;
+std::uint8_t**         g_menuwind_singleton_slot = nullptr;
+void*                  g_menu_manager_instance = nullptr;
+FfxiOpNewFn            g_orig_ffxi_new = nullptr;
+FfxiOpDeleteFn         g_orig_ffxi_delete = nullptr;
+FfxiPlayConfirmSoundFn g_orig_play_confirm_sound = nullptr;
+FfxiFrameUpdateBoxFn   g_orig_frame_update_box = nullptr;
+FfxiBtnCtorFn          g_orig_btn_ctor = nullptr;
+FfxiBtnInitFn          g_orig_btn_init = nullptr;
+FfxiBtnRecalcRectFn    g_orig_btn_recalc_rect = nullptr;
+FfxiBtnUpdateSpriteFn  g_orig_btn_update_sprite = nullptr;
+FfxiBtnSetStateFn      g_orig_btn_set_state = nullptr;
+FfxiPrimSetSelectedFn  g_orig_prim_set_selected = nullptr;
+FfxiListPushBackFn     g_orig_list_push_back = nullptr;
+FfxiListRemoveNodeFn   g_orig_list_remove_node = nullptr;
+FfxiCloseMenuFn        g_orig_close_menu = nullptr;
+
+std::mutex g_commands_menu_mutex;
+const ::soulspire::native::NativeMenuButtonRes g_soulspire_btn_res = ::soulspire::native::make_soulspire_button_res();
+const ::soulspire::native::NativeMenuButtonData g_soulspire_btn_data = {
+    &g_soulspire_btn_res,
+    nullptr,
+    ::soulspire::native::kCommandsSoulspireHelp,
+    ::soulspire::native::kCommandsSoulspireTitle,
+    0u
+};
+std::unique_ptr<::soulspire::native::SoulspireMenuSpriteBank> g_commands_sprite_banks[::soulspire::native::kMaxCommandsSpriteBanks]{};
+std::size_t g_last_commands_sprite_bank = 0;
+std::atomic<const std::uint8_t*> g_active_menuwind_data{nullptr};
+std::atomic<std::uint32_t> g_commands_injected{0};
+std::atomic<bool> g_commands_ever_injected{false};
 
 // Thread-local string buffers for FFXiMain.dll UI callbacks (game thread only).
 thread_local std::int32_t g_tls_magic_id = -1;
@@ -595,6 +656,312 @@ __declspec(naked) void thunk_ability_list_filter()
     }
 }
 
+// ============================================================================
+// Native FFXI Commands Menu ("menu    menuwind") — Status -> Soulspire -> Equipment
+// ============================================================================
+std::uint8_t* acquire_soulspire_menu_sprite(
+    const std::uint8_t* const src_sprites[::soulspire::native::kCommandsSourceSpriteCount]) noexcept
+{
+    using namespace ::soulspire::native;
+    if (src_sprites == nullptr || src_sprites[0] == nullptr) return nullptr;
+    const std::uint8_t* status_node0 = nullptr;
+    const std::uint8_t* status_tile0 = nullptr;
+    if (!sprite_list_tile_at(src_sprites[0], 0, status_node0, status_tile0)) return nullptr;
+
+    std::lock_guard lock(g_commands_menu_mutex);
+    if (g_last_commands_sprite_bank < kMaxCommandsSpriteBanks &&
+        g_commands_sprite_banks[g_last_commands_sprite_bank] != nullptr &&
+        g_commands_sprite_banks[g_last_commands_sprite_bank]->active &&
+        commands_sprite_bank_key_matches(g_commands_sprite_banks[g_last_commands_sprite_bank]->key, src_sprites, status_tile0)) {
+        return g_commands_sprite_banks[g_last_commands_sprite_bank]->sprite;
+    }
+    for (std::size_t i = 0; i < kMaxCommandsSpriteBanks; ++i) {
+        if (g_commands_sprite_banks[i] != nullptr &&
+            g_commands_sprite_banks[i]->active &&
+            commands_sprite_bank_key_matches(g_commands_sprite_banks[i]->key, src_sprites, status_tile0)) {
+            g_last_commands_sprite_bank = i;
+            return g_commands_sprite_banks[i]->sprite;
+        }
+    }
+    for (std::size_t i = 0; i < kMaxCommandsSpriteBanks; ++i) {
+        if (g_commands_sprite_banks[i] == nullptr) {
+            auto fresh = std::unique_ptr<SoulspireMenuSpriteBank>(new (std::nothrow) SoulspireMenuSpriteBank{});
+            if (fresh == nullptr) break;
+            if (!synthesize_soulspire_menu_sprite(*fresh, src_sprites)) break;
+            std::uint8_t* sp = fresh->sprite;
+            g_commands_sprite_banks[i] = std::move(fresh);
+            g_last_commands_sprite_bank = i;
+            return sp;
+        }
+    }
+    return nullptr;
+}
+
+bool inject_commands_menu_entry_impl(std::uint8_t* prim) noexcept
+{
+    using namespace ::soulspire::native;
+    if (prim == nullptr) return false;
+    std::uint8_t* menu_data = nullptr;
+    std::memcpy(&menu_data, prim + 0x04, sizeof(menu_data));
+    if (!is_commands_menu_form(menu_data)) return false;
+
+    if (g_orig_ffxi_new == nullptr || g_orig_btn_ctor == nullptr ||
+        g_orig_btn_init == nullptr || g_orig_btn_recalc_rect == nullptr ||
+        g_orig_btn_update_sprite == nullptr || g_orig_btn_set_state == nullptr ||
+        g_orig_list_push_back == nullptr || g_orig_frame_update_box == nullptr) {
+        return false;
+    }
+
+    std::uint8_t* frame = nullptr;
+    std::uint8_t* existing_btn16 = nullptr;
+    std::uint8_t* shifted_buttons[16]{};
+    std::size_t shifted_count = 0;
+    std::size_t total_button_count = 0;
+    const std::uint8_t* src_sprites[kCommandsSourceSpriteCount]{};
+
+    std::uint8_t* node = nullptr;
+    std::memcpy(&node, prim + 0x14, sizeof(node));
+    std::uint32_t guard = 0;
+    while (node != nullptr && guard < 128u) {
+        ++guard;
+        if (node[0x14] == 0) {
+            std::uint8_t* elem = nullptr;
+            std::memcpy(&elem, node + 0x10, sizeof(elem));
+            if (elem != nullptr) {
+                std::int16_t elem_type = -1;
+                std::memcpy(&elem_type, elem, sizeof(elem_type));
+                if (elem_type == 0 && frame == nullptr) {
+                    frame = elem;
+                } else if (elem_type == 1) {
+                    ++total_button_count;
+                    std::int16_t btn_id = 0;
+                    std::memcpy(&btn_id, elem + 0x3A, sizeof(btn_id));
+                    if (btn_id == kCommandsSoulspireButtonId) {
+                        existing_btn16 = elem;
+                    } else {
+                        if (is_commands_shifted_row_button(btn_id) && shifted_count < 16u) {
+                            shifted_buttons[shifted_count++] = elem;
+                        }
+                        for (std::size_t s = 0; s < kCommandsSourceSpriteCount; ++s) {
+                            if (btn_id == kCommandsSourceButtonIds[s]) {
+                                const std::uint8_t* sp = nullptr;
+                                std::memcpy(&sp, elem + 0x04, sizeof(sp));
+                                src_sprites[s] = sp;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        std::uint8_t* next = nullptr;
+        std::memcpy(&next, node + 0x00, sizeof(next));
+        node = next;
+    }
+
+    // Fail-closed guard against [client] singlemenu=1 (27-button combined menuwind where ID 16 = Missions).
+    if (total_button_count > static_cast<std::size_t>(kCommandsExpandedButtonCount)) {
+        return false;
+    }
+
+    std::uint8_t* soulspire_sprite = acquire_soulspire_menu_sprite(src_sprites);
+    if (soulspire_sprite == nullptr) return false;
+
+    std::int16_t origin_x = 0, origin_y = 0;
+    std::memcpy(&origin_x, prim + 0x52, sizeof(origin_x));
+    std::memcpy(&origin_y, prim + 0x54, sizeof(origin_y));
+    const std::uint8_t use_scale = prim[0x99];
+
+    if (frame != nullptr) {
+        std::uint8_t* frame_data = nullptr;
+        std::memcpy(&frame_data, frame + 0x30, sizeof(frame_data));
+        std::uint8_t* frame_res = nullptr;
+        if (frame_data != nullptr) std::memcpy(&frame_res, frame_data, sizeof(frame_res));
+        if (frame_res != nullptr) {
+            std::int16_t res_h = 0;
+            std::memcpy(&res_h, frame_res + 0x0C, sizeof(res_h));
+            if (res_h > kCommandsExpandedFrameH) return false;
+            if (res_h == kCommandsVanillaFrameH) {
+                res_h = kCommandsExpandedFrameH;
+                std::memcpy(frame_res + 0x0C, &res_h, sizeof(res_h));
+            }
+            if (use_scale == 0) {
+                std::int16_t scr_h = 0;
+                std::memcpy(&scr_h, frame + 0x24, sizeof(scr_h));
+                if (scr_h == kCommandsVanillaFrameH) {
+                    scr_h = kCommandsExpandedFrameH;
+                    std::memcpy(frame + 0x24, &scr_h, sizeof(scr_h));
+                }
+            }
+            g_orig_frame_update_box(frame, nullptr, use_scale);
+            std::int16_t frame_y = 0, frame_h = 0;
+            std::memcpy(&frame_y, frame + 0x1C, sizeof(frame_y));
+            std::memcpy(&frame_h, frame + 0x24, sizeof(frame_h));
+            const std::int16_t new_bottom = static_cast<std::int16_t>(frame_y + frame_h);
+            std::memcpy(prim + 0x40, &new_bottom, sizeof(new_bottom));
+            std::memcpy(prim + 0x48, &new_bottom, sizeof(new_bottom));
+        }
+    }
+
+    for (std::size_t i = 0; i < shifted_count; ++i) {
+        std::uint8_t* btn = shifted_buttons[i];
+        std::int16_t btn_id = 0, rel_top = 0, rel_bottom = 0;
+        std::memcpy(&btn_id, btn + 0x3A, sizeof(btn_id));
+        std::memcpy(&rel_top, btn + 0x34, sizeof(rel_top));
+        std::memcpy(&rel_bottom, btn + 0x38, sizeof(rel_bottom));
+        const std::int16_t vanilla_y = commands_vanilla_row_y(btn_id);
+        if (vanilla_y >= 0 && rel_top == vanilla_y) {
+            rel_top = static_cast<std::int16_t>(rel_top + kCommandsRowPitchPx);
+            rel_bottom = static_cast<std::int16_t>(rel_bottom + kCommandsRowPitchPx);
+            std::memcpy(btn + 0x34, &rel_top, sizeof(rel_top));
+            std::memcpy(btn + 0x38, &rel_bottom, sizeof(rel_bottom));
+            g_orig_btn_recalc_rect(btn, nullptr, static_cast<std::int32_t>(origin_x), static_cast<std::int32_t>(origin_y), use_scale);
+        }
+    }
+
+    if (existing_btn16 == nullptr) {
+        void* raw = g_orig_ffxi_new(0x60u);
+        if (raw == nullptr) return false;
+        std::uint8_t* btn16 = static_cast<std::uint8_t*>(g_orig_btn_ctor(raw, nullptr, prim));
+        if (btn16 == nullptr) {
+            if (g_orig_ffxi_delete != nullptr) g_orig_ffxi_delete(raw);
+            return false;
+        }
+        std::int16_t btn_count = 0;
+        std::memcpy(&btn_count, prim + 0x58, sizeof(btn_count));
+        ++btn_count;
+        std::memcpy(prim + 0x58, &btn_count, sizeof(btn_count));
+
+        g_orig_btn_init(btn16, nullptr, &g_soulspire_btn_data);
+        std::memcpy(btn16 + 0x08, &soulspire_sprite, sizeof(soulspire_sprite));
+        btn16[0x48] = 0;
+        g_orig_btn_recalc_rect(btn16, nullptr, static_cast<std::int32_t>(origin_x), static_cast<std::int32_t>(origin_y), use_scale);
+        g_orig_btn_update_sprite(btn16, nullptr, use_scale);
+        g_orig_btn_set_state(btn16, nullptr, kCommandsButtonStateEnabled);
+        g_orig_list_push_back(prim + 0x14, nullptr, btn16);
+        engine().increment_hook_hit("menuwind_restore_cached");
+    } else {
+        std::memcpy(existing_btn16 + 0x08, &soulspire_sprite, sizeof(soulspire_sprite));
+        std::memcpy(existing_btn16 + 0x04, &soulspire_sprite, sizeof(soulspire_sprite));
+        existing_btn16[0x48] = 0;
+        g_orig_btn_recalc_rect(existing_btn16, nullptr, static_cast<std::int32_t>(origin_x), static_cast<std::int32_t>(origin_y), use_scale);
+        g_orig_btn_update_sprite(existing_btn16, nullptr, use_scale);
+        std::uint32_t cur_state = 0;
+        std::memcpy(&cur_state, existing_btn16 + 0x10, sizeof(cur_state));
+        if (cur_state == kCommandsButtonStatePressed) {
+            g_orig_btn_set_state(existing_btn16, nullptr, kCommandsButtonStateEnabled);
+        }
+    }
+
+    g_active_menuwind_data.store(menu_data, std::memory_order_release);
+    g_commands_ever_injected.store(true, std::memory_order_release);
+    g_commands_injected.store(1u, std::memory_order_release);
+    return true;
+}
+
+void __stdcall on_menuwind_before_restore_cursor(std::uint8_t* prim) noexcept
+{
+    if (!engine().enabled() || prim == nullptr) return;
+    __try {
+        inject_commands_menu_entry_impl(prim);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+std::int32_t __stdcall resolve_menuwind_next_button_hook(
+    const std::uint8_t* menu_data,
+    std::int32_t cur_btn,
+    std::int32_t dir_key) noexcept
+{
+    if (!engine().enabled() || menu_data == nullptr) return 0;
+    if (menu_data != g_active_menuwind_data.load(std::memory_order_acquire)) return 0;
+    const bool injected = g_commands_injected.load(std::memory_order_acquire) != 0;
+    const std::int16_t override_btn = ::soulspire::native::resolve_commands_menu_next_button(
+        static_cast<std::int16_t>(cur_btn), static_cast<std::int16_t>(dir_key), injected);
+    if (override_btn > 0) {
+        engine().increment_hook_hit("menuwind_next_button");
+        return static_cast<std::int32_t>(override_btn);
+    }
+    return 0;
+}
+
+std::uint8_t __stdcall handle_menuwind_key_item(
+    std::uint8_t* menuwind,
+    std::int32_t key,
+    std::int32_t btn_id) noexcept
+{
+    using namespace ::soulspire::native;
+    if (!engine().enabled()) return 0;
+    if (key != kCommandsKeyConfirm || btn_id != kCommandsSoulspireButtonId) return 0;
+    if (g_commands_injected.load(std::memory_order_acquire) == 0) return 0;
+
+    if (g_orig_play_confirm_sound != nullptr) {
+        g_orig_play_confirm_sound();
+    }
+    if (menuwind != nullptr && g_orig_close_menu != nullptr && g_menu_manager_instance != nullptr) {
+        std::uint8_t* prim = nullptr;
+        std::memcpy(&prim, menuwind + 0x08, sizeof(prim));
+        if (prim != nullptr) {
+            g_orig_close_menu(g_menu_manager_instance, nullptr, prim, 1);
+        }
+    }
+    engine().increment_hook_hit("menuwind_key_item");
+    engine().request_open_core();
+    return 1;
+}
+
+__declspec(naked) void thunk_menuwind_restore_cursor()
+{
+    __asm {
+        pushad
+        push ecx
+        call on_menuwind_before_restore_cursor
+        popad
+        jmp dword ptr [g_orig_restore_saved_cursor]
+    }
+}
+
+__declspec(naked) void thunk_menuwind_next_button()
+{
+    __asm {
+        pushad
+        movsx eax, word ptr [esp + 40]
+        movsx edx, word ptr [esp + 36]
+        push eax
+        push edx
+        push ecx
+        call resolve_menuwind_next_button_hook
+        test eax, eax
+        jz stock
+        mov [esp + 28], eax
+        popad
+        ret 8
+    stock:
+        popad
+        jmp dword ptr [g_orig_get_next_button]
+    }
+}
+
+__declspec(naked) void thunk_menuwind_key_item()
+{
+    __asm {
+        pushad
+        movsx eax, word ptr [esp + 40]
+        movsx edx, word ptr [esp + 36]
+        push eax
+        push edx
+        push ecx
+        call handle_menuwind_key_item
+        test al, al
+        jz stock
+        popad
+        ret 8
+    stock:
+        popad
+        movsx eax, word ptr [esp + 4]
+        jmp dword ptr [g_menuwind_key_item_resume]
+    }
+}
+
 // Finds a pattern starting strictly AFTER `after` inside FFXiMain.dll (for disambiguating twin sites).
 std::uintptr_t scan_in_module(HMODULE mod, const char* pattern, std::uintptr_t after = 0)
 {
@@ -766,6 +1133,63 @@ void install_if_ready()
     install_call("full_job_name_2", "identity", scan::find(ffxi, kPatFullJob2), g_full_job2_patch,
                  reinterpret_cast<void*>(&hook_full_job_2), kCapEquipSoulName, g_orig_full_job2);
 
+    // Native Commands menu ("menu    menuwind") hooks #28-#31 (Status -> Soulspire -> Equipment).
+    g_menuwind_singleton_slot = reinterpret_cast<std::uint8_t**>(base + 0x5793F4u);
+    g_menu_manager_instance   = reinterpret_cast<void*>(base + 0x6229F0u);
+    g_orig_ffxi_new           = reinterpret_cast<FfxiOpNewFn>(base + 0x3131FBu);
+    g_orig_ffxi_delete        = reinterpret_cast<FfxiOpDeleteFn>(base + 0x3131F0u);
+    g_orig_play_confirm_sound = reinterpret_cast<FfxiPlayConfirmSoundFn>(base + 0x037B90u);
+    g_orig_frame_update_box   = reinterpret_cast<FfxiFrameUpdateBoxFn>(base + 0x11A9E0u);
+    g_orig_btn_ctor           = reinterpret_cast<FfxiBtnCtorFn>(base + 0x11AD60u);
+    g_orig_btn_init           = reinterpret_cast<FfxiBtnInitFn>(base + 0x11AEE0u);
+    g_orig_btn_recalc_rect    = reinterpret_cast<FfxiBtnRecalcRectFn>(base + 0x11AF60u);
+    g_orig_btn_update_sprite  = reinterpret_cast<FfxiBtnUpdateSpriteFn>(base + 0x11B090u);
+    g_orig_btn_set_state      = reinterpret_cast<FfxiBtnSetStateFn>(base + 0x11AE00u);
+    g_orig_prim_set_selected  = reinterpret_cast<FfxiPrimSetSelectedFn>(base + 0x11A320u);
+    g_orig_list_push_back     = reinterpret_cast<FfxiListPushBackFn>(base + 0x127910u);
+    g_orig_list_remove_node   = reinterpret_cast<FfxiListRemoveNodeFn>(base + 0x127A10u);
+    g_orig_close_menu         = reinterpret_cast<FfxiCloseMenuFn>(base + 0x15FD60u);
+
+    const bool mw_c = install_call("menuwind_restore_cached", "commands_menu", scan::find(ffxi, kPatMenuWindRestoreCached),
+                                   g_menuwind_restore_cached_patch, reinterpret_cast<void*>(&thunk_menuwind_restore_cursor),
+                                   0u, g_orig_restore_saved_cursor);
+    std::uintptr_t orig_restore_fresh = 0;
+    const bool mw_f = install_call("menuwind_restore_fresh", "commands_menu", scan::find(ffxi, kPatMenuWindRestoreFresh),
+                                   g_menuwind_restore_fresh_patch, reinterpret_cast<void*>(&thunk_menuwind_restore_cursor),
+                                   0u, orig_restore_fresh);
+    if (g_orig_restore_saved_cursor == 0 && orig_restore_fresh != 0)
+        g_orig_restore_saved_cursor = orig_restore_fresh;
+    const bool mw_n = install_call("menuwind_next_button", "commands_menu", scan::find(ffxi, kPatMenuWindNextButton),
+                                   g_menuwind_next_button_patch, reinterpret_cast<void*>(&thunk_menuwind_next_button),
+                                   0u, g_orig_get_next_button);
+
+    bool mw_k = false;
+    const std::uintptr_t mw_key_at = scan::find(ffxi, kPatMenuWindKeyItem);
+    {
+        HookStatus st{};
+        st.id = "menuwind_key_item";
+        st.group = "commands_menu";
+        st.owner = "soulspire";
+        st.disposition = "migrated";
+        if (mw_key_at != 0) {
+            st.rva = static_cast<std::uint32_t>(mw_key_at - base);
+            g_menuwind_key_item_resume = mw_key_at + 5;
+            if (imports::jump(reinterpret_cast<void*>(mw_key_at), reinterpret_cast<void*>(&thunk_menuwind_key_item))) {
+                st.installed = true;
+                st.detail = "prologue jump installed (5B)";
+                mw_k = true;
+            } else {
+                st.detail = "jump patch failed";
+            }
+        } else {
+            st.detail = "signature not found";
+        }
+        statuses.push_back(std::move(st));
+    }
+    if (mw_c && mw_f && mw_n && mw_k) {
+        caps |= kCapCommandsMenuEntry;
+    }
+
     std::uint32_t ok_count = 0;
     for (const auto& h : statuses) {
         if (h.installed)
@@ -795,6 +1219,9 @@ void uninstall()
     g_item_job_patch.uninstall();
     g_full_job1_patch.uninstall();
     g_full_job2_patch.uninstall();
+    g_menuwind_restore_cached_patch.uninstall();
+    g_menuwind_restore_fresh_patch.uninstall();
+    g_menuwind_next_button_patch.uninstall();
 }
 
 } // namespace vanacore::soulspire::hooks

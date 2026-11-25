@@ -539,6 +539,11 @@ int main()
               st.all_mob_statuses().size() == 1,
               "Phase B.2 diagnostics report packet counts, Hook #20 capability, disposition, and mob statuses");
 
+        // 6c. Native Commands menu (Status -> Soulspire -> Equipment) & open_core queue
+        st.request_open_core();
+        check(st.consume_open_core() == 1 && st.consume_open_core() == 0,
+              "request_open_core / consume_open_core atomically delivers menu activation");
+
         // 7. Zone transition clears stale session state cleanly
         std::uint8_t pkt_00b[8]{};
         packets::on_incoming(st, 0x00B, pkt_00b, sizeof(pkt_00b), 400);
