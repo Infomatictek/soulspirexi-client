@@ -638,11 +638,14 @@ int main()
               "is_interface_subkey rejects null, empty, sibling, and nested subkeys");
 
         // Real HKLM Interface opens are strictly read-only and default to 32-bit WOW64 view
+        // Note: KEY_READ and KEY_WRITE both include READ_CONTROL (STANDARD_RIGHTS_READ == STANDARD_RIGHTS_WRITE),
+        // so verify no mutating registry access bits remain.
+        constexpr REGSAM kMutatingBits = KEY_SET_VALUE | KEY_CREATE_SUB_KEY | DELETE | WRITE_DAC | WRITE_OWNER;
         const REGSAM stripped_all = policy::interface_read_only_access(KEY_ALL_ACCESS);
-        check(stripped_all == (KEY_READ | KEY_WOW64_32KEY) && (stripped_all & KEY_WRITE) == 0,
+        check(stripped_all == (KEY_READ | KEY_WOW64_32KEY) && (stripped_all & kMutatingBits) == 0,
               "interface_read_only_access strips KEY_ALL_ACCESS to KEY_READ|KEY_WOW64_32KEY");
         const REGSAM kept_64 = policy::interface_read_only_access(KEY_WRITE | KEY_WOW64_64KEY);
-        check(kept_64 == (KEY_READ | KEY_WOW64_64KEY) && (kept_64 & KEY_SET_VALUE) == 0,
+        check(kept_64 == (KEY_READ | KEY_WOW64_64KEY) && (kept_64 & kMutatingBits) == 0,
               "interface_read_only_access strips write rights while preserving explicit KEY_WOW64_64KEY");
 
         // Silent pre-Direct3D GameStart return (S_OK / 0x00000000) is classified as startup failure
