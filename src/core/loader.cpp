@@ -19,6 +19,7 @@
 
 #include "client.hpp"
 #include "imports.hpp"
+#include "loader_startup.hpp"
 #include "log.hpp"
 #include "overlay.hpp"
 #include "scan.hpp"
@@ -973,17 +974,19 @@ int run_game(const BootInfo& boot)
             log::write(L"Startup trace: IFFXiEntry::GameStart returned 0x%08lX (d3d_reached=%d, tid=%lu, elapsed=%llu ms)",
                        static_cast<unsigned long>(ended), overlay::direct3d_reached() ? 1 : 0,
                        GetCurrentThreadId(), elapsed);
-        if (!overlay::direct3d_reached()) {
+        const GameStartClassification classification =
+            classify_game_start_exit(ended, overlay::direct3d_reached(), kExitGameStartFailed);
+        if (classification.outcome == GameStartOutcome::ExitedBeforeDirect3D) {
             log::write(L"Game start: FFXI exited before Direct3D initialization (0x%08lX, after %llu ms); "
                        L"treating as startup failure",
                        static_cast<unsigned long>(ended), elapsed);
             shutdown::run(L"FFXI exited before Direct3D initialization");
-            result = kExitGameStartFailed;
+            result = classification.exit_code;
         } else {
             log::write(L"Game start: FFXI has closed (0x%08lX, after %llu ms)", static_cast<unsigned long>(ended),
                        elapsed);
             shutdown::run(L"FFXI has closed");
-            result = 0;
+            result = classification.exit_code;
         }
     } while (false);
 

@@ -66,9 +66,12 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\ini.hpp" />
+    <ClInclude Include="..\loader_startup.hpp" />
+    <ClInclude Include="..\registry_policy.hpp" />
     <ClInclude Include="..\settings.hpp" />
     <ClInclude Include="..\log.hpp" />
     <ClInclude Include="..\..\launcher\login.hpp" />
+    <ClInclude Include="..\..\shared\vanacore\boot_info.hpp" />
     <ClInclude Include="..\..\shared\vanacore\tls_client.hpp" />
     <ClInclude Include="..\soulspire\state.hpp" />
     <ClInclude Include="..\soulspire\packets.hpp" />

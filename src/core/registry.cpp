@@ -24,6 +24,7 @@
 #include "client.hpp"
 #include "imports.hpp"
 #include "log.hpp"
+#include "registry_policy.hpp"
 #include "window.hpp"
 
 namespace vanacore::registry {
@@ -671,29 +672,11 @@ const wchar_t* key_label(Key key)
     }
 }
 
-// The keys a PlayOnline install has under its root (PlayOnline, PlayOnlineUS or PlayOnlineEU), the
-// vendor spelled SquareEnix (JP's is SQUARE). Only these are stood in for: any other key is the
-// registry's own, so a look for one not there still finds nothing, as it would with PlayOnline installed.
-constexpr std::wstring_view kStandInKeys[] = {
-    L"",
-    L"InstallFolder",
-    L"Interface",
-    L"Product",
-    L"SquareEnix",
-    L"SquareEnix\\FinalFantasyXI",
-    L"SquareEnix\\PlayOnlineViewer",
-    L"SquareEnix\\PlayOnlineViewer\\Settings",
-    L"SquareEnix\\PlayOnlineViewer\\Settings\\Controler",
-    L"SquareEnix\\PlayOnlineViewer\\Settings\\Controller",
-    L"SquareEnix\\PlayOnlineViewer\\SystemInfo",
-    L"SquareEnix\\PlayOnlineViewer\\SystemInfo\\QCheck",
-};
-
 // A normal install's values (the CatsEyeXI launcher's reference ffxi.reg, with its resolutions and
 // window mode), which a stand-in key serves for a value it doesn't hold: [ffxi.registry], [language]
 // and the install folders come first, and a value the game writes to the stand-in is kept.
 struct StandInValue {
-    std::wstring_view key; // as kStandInKeys
+    std::wstring_view key; // as policy::kStandInKeys
     const char* name;      // "" is the key's default value
     DWORD type;
     DWORD number;          // REG_DWORD
@@ -771,65 +754,11 @@ constexpr StandInValue kStandInValues[] = {
     {L"SquareEnix\\PlayOnlineViewer\\SystemInfo\\QCheck", "LastMeasurementTime", REG_BINARY, 0, L""},
 };
 
-std::vector<std::wstring_view> split(std::wstring_view path)
-{
-    std::vector<std::wstring_view> parts;
-    while (!path.empty()) {
-        const size_t slash = path.find(L'\\');
-        if (slash != 0)
-            parts.push_back(path.substr(0, slash));
-        if (slash == std::wstring_view::npos)
-            break;
-        path.remove_prefix(slash + 1);
-    }
-    return parts;
-}
-
-// Where `path` is among the PlayOnline keys: its root (PlayOnlineUS), and what's under it with the
-// vendor spelled SquareEnix, if it's a key of kStandInKeys under HKLM\SOFTWARE (as the game or the
-// kernel names it, WOW6432Node or not) or already a stand-in.
-struct StandInPlace {
-    std::wstring root;
-    std::wstring subkey;   // as given: "SQUARE\FinalFantasyXI"
-    std::wstring key;      // as kStandInKeys: "SquareEnix\FinalFantasyXI"
-    bool stand_in = false; // under HKCU\<kStandInRoot> already
-};
+using StandInPlace = policy::StandInTarget;
 
 std::optional<StandInPlace> stand_in_place(std::wstring_view path)
 {
-    const std::vector<std::wstring_view> parts = split(path);
-    size_t root = 0;
-    while (root < parts.size() && !is_region_root(parts[root]))
-        ++root;
-    if (root == parts.size())
-        return std::nullopt;
-
-    const auto at = [&](size_t index, std::wstring_view name) { return index < root && is(parts[index], name); };
-    size_t next = at(0, L"HKLM") ? 1 : at(0, L"REGISTRY") && at(1, L"MACHINE") ? 2 : 0;
-    bool machine = false;
-    if (next != 0 && at(next, L"SOFTWARE")) {
-        ++next;
-        if (at(next, L"WOW6432Node"))
-            ++next;
-        machine = next == root;
-    }
-    const bool stand_in = root >= 2 && is(parts[root - 2], L"VanaCore") && is(parts[root - 1], L"Registry");
-    if (!machine && !stand_in)
-        return std::nullopt;
-
-    StandInPlace place{std::wstring(parts[root]), {}, {}, stand_in};
-    for (size_t i = root + 1; i < parts.size(); ++i) {
-        if (i > root + 1) {
-            place.subkey += L'\\';
-            place.key += L'\\';
-        }
-        place.subkey += parts[i];
-        place.key += i == root + 1 && is_vendor(parts[i]) ? std::wstring(L"SquareEnix") : std::wstring(parts[i]);
-    }
-    if (std::none_of(std::begin(kStandInKeys), std::end(kStandInKeys),
-                     [&](std::wstring_view known) { return is(place.key, known); }))
-        return std::nullopt;
-    return place;
+    return policy::parse_stand_in_place(path);
 }
 
 bool has_stand_in_value(const char* name)
@@ -989,21 +918,25 @@ LSTATUS open_stand_in(HKEY parent, LPCSTR subkey, REGSAM access, PHKEY result, L
     // real Windows registry under HKLM\SOFTWARE\WOW6432Node\PlayOnline*\Interface\0001. Shadowing
     // Interface with an empty stand-in (defaulting 0001 to "0") causes polcore's patch.ver decryption
     // to fail and FFXiMain.dll to exit silently before creating its window or calling Direct3DCreate8.
-    // Open the real HKLM Interface key read-only first (never modifying the user's registry); fall back
-    // to the stand-in key only when no real PlayOnline Interface key exists on this machine.
-    if (is(place->key, L"Interface") && !place->stand_in && disposition == nullptr) {
+    // Open the real HKLM Interface key read-only first (both for direct HKLM opens/creates and for
+    // relative "Interface" opens beneath a stand-in PlayOnline* parent handle, never modifying the
+    // user's registry); fall back to the stand-in key only when no real PlayOnline Interface key exists.
+    if (const std::optional<std::wstring> real_subkey = policy::real_interface_subkey(path)) {
         const auto open = g_open_key != nullptr ? g_open_key : &RegOpenKeyExA;
         HKEY real_key = nullptr;
-        if (open(parent, subkey, 0, read_only_access(access), &real_key) == ERROR_SUCCESS) {
+        if (open(HKEY_LOCAL_MACHINE, narrow(*real_subkey).c_str(), 0,
+                 policy::interface_read_only_access(access), &real_key) == ERROR_SUCCESS) {
             *result = real_key;
+            if (disposition != nullptr)
+                *disposition = REG_OPENED_EXISTING_KEY;
             bool first = false;
             {
                 std::lock_guard lock(g_stand_in_mutex);
                 first = g_stand_in_logged.insert(L"real:" + place->root + L"\\" + place->key).second;
             }
             if (first)
-                log::write(L"Registry: %ls opened from the real Windows registry (read-only) for PlayOnline patch.ver verification",
-                           path.c_str());
+                log::write(L"Registry: HKLM\\%ls opened from the real Windows registry (read-only) for PlayOnline patch.ver verification",
+                           real_subkey->c_str());
             return ERROR_SUCCESS;
         }
     }
@@ -1156,9 +1089,11 @@ LSTATUS APIENTRY query_value(HKEY key, LPCSTR name, LPDWORD reserved, LPDWORD ty
 LSTATUS APIENTRY open_key(HKEY parent, LPCSTR subkey, DWORD options, REGSAM access, PHKEY result)
 {
     g_open_calls.fetch_add(1, std::memory_order_relaxed);
-    // A PlayOnline install's keys are always the stand-ins, whether or not the registry has them
-    LSTATUS status = names_playonline(subkey) ? open_stand_in(parent, subkey, access, result, nullptr)
-                                              : ERROR_FILE_NOT_FOUND;
+    // A PlayOnline install's keys are always the stand-ins (except Interface, which resolves to real
+    // HKLM read-only even when opened relative to a stand-in PlayOnline* parent handle).
+    LSTATUS status = (names_playonline(subkey) || policy::is_interface_subkey(subkey))
+                         ? open_stand_in(parent, subkey, access, result, nullptr)
+                         : ERROR_FILE_NOT_FOUND;
     bool read_only = false;
     if (status != ERROR_SUCCESS) {
         status = g_open_key(parent, subkey, options, access, result);
@@ -1177,9 +1112,11 @@ LSTATUS APIENTRY open_key(HKEY parent, LPCSTR subkey, DWORD options, REGSAM acce
 LSTATUS APIENTRY create_key(HKEY parent, LPCSTR subkey, DWORD reserved, LPSTR key_class, DWORD options,
                             REGSAM access, const LPSECURITY_ATTRIBUTES security, PHKEY result, LPDWORD disposition)
 {
-    // A PlayOnline install's keys are always the stand-ins, whether or not the registry has them
-    LSTATUS status = names_playonline(subkey) ? open_stand_in(parent, subkey, access, result, disposition)
-                                              : ERROR_FILE_NOT_FOUND;
+    // A PlayOnline install's keys are always the stand-ins (except Interface, which resolves to real
+    // HKLM read-only even when created/opened relative to a stand-in PlayOnline* parent handle).
+    LSTATUS status = (names_playonline(subkey) || policy::is_interface_subkey(subkey))
+                         ? open_stand_in(parent, subkey, access, result, disposition)
+                         : ERROR_FILE_NOT_FOUND;
     bool read_only = false;
     if (status != ERROR_SUCCESS) {
         status = g_create_key(parent, subkey, reserved, key_class, options, access, security, result, disposition);

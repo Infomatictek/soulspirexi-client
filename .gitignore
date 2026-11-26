@@ -44,6 +44,7 @@ amd_fidelityfx_*.dll
 CLAUDE.md
 !/CLAUDE.md
 AGENTS.md
+!/AGENTS.md
 .claude/
 .cursor/
 /tools/addon_install_paths.py

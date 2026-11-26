@@ -13,11 +13,14 @@
 #include <vector>
 
 #include "../ini.hpp"
+#include "../loader_startup.hpp"
+#include "../registry_policy.hpp"
 #include "../settings.hpp"
 #include "../soulspire/input_ownership.hpp"
 #include "../soulspire/packets.hpp"
 #include "../soulspire/state.hpp"
 #include "../../launcher/login.hpp"
+#include "../../shared/vanacore/boot_info.hpp"
 
 namespace vanacore::log {
 // settings.cpp's log lines, to the console here
@@ -583,6 +586,80 @@ int main()
         const auto after = io.snapshot();
         check(after.acquire_count == before.acquire_count + 10 && after.release_count == before.release_count + 10,
               "10 repeated open/close cycles have balanced acquire/release counts");
+    }
+
+    // 10. Retail PlayOnline Interface registry policy & silent pre-D3D GameStart exit regressions
+    {
+        namespace policy = vanacore::registry::policy;
+
+        // Direct HKLM, WOW6432Node, kernel path, trailing slash, and stand-in-relative paths all resolve to real HKLM Interface
+        check(policy::real_interface_subkey(L"HKLM\\SOFTWARE\\PlayOnlineUS\\Interface") ==
+                  std::optional<std::wstring>(L"SOFTWARE\\PlayOnlineUS\\Interface"),
+              "HKLM PlayOnlineUS\\Interface resolves to real HKLM subkey");
+        check(policy::real_interface_subkey(L"HKLM\\SOFTWARE\\WOW6432Node\\PlayOnlineUS\\Interface") ==
+                  std::optional<std::wstring>(L"SOFTWARE\\PlayOnlineUS\\Interface"),
+              "HKLM WOW6432Node PlayOnlineUS\\Interface resolves to real HKLM subkey");
+        check(policy::real_interface_subkey(L"\\REGISTRY\\MACHINE\\SOFTWARE\\WOW6432Node\\PlayOnlineEU\\Interface\\") ==
+                  std::optional<std::wstring>(L"SOFTWARE\\PlayOnlineEU\\Interface"),
+              "kernel-form PlayOnlineEU\\Interface with trailing slash resolves to real HKLM subkey");
+        check(policy::real_interface_subkey(L"\\REGISTRY\\MACHINE\\SOFTWARE\\PlayOnline\\Interface") ==
+                  std::optional<std::wstring>(L"SOFTWARE\\PlayOnline\\Interface"),
+              "JP PlayOnline\\Interface resolves to real HKLM subkey");
+        check(policy::real_interface_subkey(
+                  L"\\REGISTRY\\USER\\S-1-5-21-1000\\Software\\VanaCore\\Registry\\PlayOnlineUS\\Interface") ==
+                  std::optional<std::wstring>(L"SOFTWARE\\PlayOnlineUS\\Interface"),
+              "stand-in-relative PlayOnlineUS\\Interface resolves to real HKLM subkey (not empty HKCU stand-in)");
+        check(policy::real_interface_subkey(L"HKCU\\Software\\VanaCore\\Registry\\PlayOnlineUS\\interface") ==
+                  std::optional<std::wstring>(L"SOFTWARE\\PlayOnlineUS\\Interface"),
+              "case-insensitive stand-in Interface resolves to real HKLM subkey");
+
+        // Non-Interface PlayOnline keys remain stand-ins; unrelated Interface keys are never intercepted
+        check(!policy::real_interface_subkey(L"HKLM\\SOFTWARE\\PlayOnlineUS\\InstallFolder").has_value(),
+              "InstallFolder stays on stand-in/served path");
+        check(!policy::real_interface_subkey(L"HKLM\\SOFTWARE\\PlayOnlineUS\\SquareEnix\\FinalFantasyXI").has_value(),
+              "FinalFantasyXI settings key stays on stand-in path");
+        check(!policy::real_interface_subkey(L"HKLM\\SOFTWARE\\PlayOnline\\SQUARE\\FinalFantasyXI").has_value(),
+              "JP SQUARE\\FinalFantasyXI settings key stays on stand-in path");
+        check(!policy::real_interface_subkey(L"HKLM\\SOFTWARE\\PlayOnlineUS\\Product").has_value(),
+              "Product key stays on stand-in path");
+        check(!policy::real_interface_subkey(L"HKLM\\SOFTWARE\\PlayOnlineUS").has_value(),
+              "PlayOnlineUS root key stays on stand-in path");
+        check(!policy::real_interface_subkey(L"HKCR\\Interface").has_value(),
+              "unrelated HKCR\\Interface is never redirected");
+        check(!policy::real_interface_subkey(L"HKCU\\Software\\OtherApp\\Interface").has_value(),
+              "unrelated HKCU app Interface key is never redirected");
+
+        // Relative "Interface" subkey detection
+        check(policy::is_interface_subkey("Interface") && policy::is_interface_subkey("interface") &&
+                  policy::is_interface_subkey("\\Interface\\"),
+              "is_interface_subkey matches Interface regardless of case or surrounding slashes");
+        check(!policy::is_interface_subkey(nullptr) && !policy::is_interface_subkey("") &&
+                  !policy::is_interface_subkey("InstallFolder") && !policy::is_interface_subkey("Interface\\Sub"),
+              "is_interface_subkey rejects null, empty, sibling, and nested subkeys");
+
+        // Real HKLM Interface opens are strictly read-only and default to 32-bit WOW64 view
+        const REGSAM stripped_all = policy::interface_read_only_access(KEY_ALL_ACCESS);
+        check(stripped_all == (KEY_READ | KEY_WOW64_32KEY) && (stripped_all & KEY_WRITE) == 0,
+              "interface_read_only_access strips KEY_ALL_ACCESS to KEY_READ|KEY_WOW64_32KEY");
+        const REGSAM kept_64 = policy::interface_read_only_access(KEY_WRITE | KEY_WOW64_64KEY);
+        check(kept_64 == (KEY_READ | KEY_WOW64_64KEY) && (kept_64 & KEY_SET_VALUE) == 0,
+              "interface_read_only_access strips write rights while preserving explicit KEY_WOW64_64KEY");
+
+        // Silent pre-Direct3D GameStart return (S_OK / 0x00000000) is classified as startup failure
+        const auto silent_pre_d3d =
+            vanacore::loader::classify_game_start_exit(S_OK, false, vanacore::kExitGameStartFailed);
+        check(silent_pre_d3d.outcome == vanacore::loader::GameStartOutcome::ExitedBeforeDirect3D &&
+                  silent_pre_d3d.exit_code == vanacore::kExitGameStartFailed && silent_pre_d3d.exit_code != 0,
+              "GameStart S_OK before Direct3DCreate8 classifies as ExitedBeforeDirect3D with non-zero exit");
+        const auto err_pre_d3d =
+            vanacore::loader::classify_game_start_exit(E_FAIL, false, vanacore::kExitGameStartFailed);
+        check(err_pre_d3d.outcome == vanacore::loader::GameStartOutcome::ExitedBeforeDirect3D &&
+                  err_pre_d3d.exit_code == vanacore::kExitGameStartFailed,
+              "GameStart failure HRESULT before Direct3DCreate8 classifies as ExitedBeforeDirect3D");
+        const auto clean_exit =
+            vanacore::loader::classify_game_start_exit(S_OK, true, vanacore::kExitGameStartFailed);
+        check(clean_exit.outcome == vanacore::loader::GameStartOutcome::CleanExit && clean_exit.exit_code == 0,
+              "GameStart return after Direct3DCreate8 classifies as CleanExit (exit 0)");
     }
 
     printf("\n%s (%d failed)\n", g_failed == 0 ? "PASS" : "FAIL", g_failed);

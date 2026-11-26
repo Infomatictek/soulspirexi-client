@@ -498,6 +498,7 @@ exit /b 0</Command>
     <ClInclude Include="input.hpp" />
     <ClInclude Include="input_background.hpp" />
     <ClInclude Include="loader.hpp" />
+    <ClInclude Include="loader_startup.hpp" />
     <ClInclude Include="lod.hpp" />
     <ClInclude Include="nameplates.hpp" />
     <ClInclude Include="widgets.hpp" />
@@ -532,6 +533,7 @@ exit /b 0</Command>
     <ClInclude Include="plugins.hpp" />
     <ClInclude Include="pluginapi.hpp" />
     <ClInclude Include="registry.hpp" />
+    <ClInclude Include="registry_policy.hpp" />
     <ClInclude Include="scan.hpp" />
     <ClInclude Include="sigs.hpp" />
     <ClInclude Include="font_folder.hpp" />
