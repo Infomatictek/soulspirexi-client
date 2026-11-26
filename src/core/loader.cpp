@@ -20,6 +20,7 @@
 #include "client.hpp"
 #include "imports.hpp"
 #include "log.hpp"
+#include "overlay.hpp"
 #include "scan.hpp"
 #include "shutdown.hpp"
 
@@ -60,6 +61,7 @@ constexpr int kInetMutex = 0x032F;        // ()
 constexpr int kSetRegion = 0x03C5;        // (int region)
 constexpr int kSetMessageText = 0x0516;   // (int message, const char* text)
 constexpr int kShowError = 0x0402;        // (int code, const char* text): how FFXi.dll reports why it can't start
+constexpr int kDecryptPatchVer = 0x0493;  // (const void* enc, char* out, int out_size, int product_id): patch.ver check
 constexpr int kSessionValue = 0x03EB;     // (uint8_t out[16]): the session value FFXiMain keys the zone with
 constexpr int kNameUnavailable = 0x04;    // the message for a character name that's taken
 constexpr int kCharacterSlots = 0x00D3;   // its code holds the address of the lobby's character slots at +31
@@ -77,11 +79,43 @@ HRESULT call(void* object, int slot, Args... args)
 // polcore's error report, which FFXi.dll calls when it gives up starting ("<what>(<code>)"): it shows nothing
 // without the PlayOnline viewer, so the text goes to the log first.
 Command g_show_error = nullptr;
+using DecryptPatchVerFn = int(__cdecl*)(const void* encrypted, char* out_buf, int out_size, int product_id);
+DecryptPatchVerFn g_decrypt_patch_ver = nullptr;
+bool g_startup_trace = false;
 
 int __cdecl show_error(int code, const char* text)
 {
     log::write(L"Game start: FFXI reported an error: %hs (code %d)", text != nullptr ? text : "(no text)", code);
     return g_show_error(code, text);
+}
+
+int __cdecl decrypt_patch_ver_observer(const void* encrypted, char* out_buf, int out_size, int product_id)
+{
+    const int rc = g_decrypt_patch_ver(encrypted, out_buf, out_size, product_id);
+    if (rc < 0) {
+        log::write(L"Game start: polcore patch.ver decryption failed (rc=%d, product=%04d, tid=%lu) — verify "
+                   L"HKLM\\SOFTWARE\\WOW6432Node\\PlayOnline*\\Interface\\%04d matches FINAL FANTASY XI\\patch.ver",
+                   rc, product_id, GetCurrentThreadId(), product_id);
+    } else if (g_startup_trace) {
+        log::write(L"Startup trace: polcore patch.ver verified (rc=%d, product=%04d, tid=%lu, t=%llu ms)",
+                   rc, product_id, GetCurrentThreadId(), GetTickCount64());
+    }
+    return rc;
+}
+
+bool in_module_image(HMODULE module, const void* address)
+{
+    if (module == nullptr || address == nullptr)
+        return false;
+    const auto base = reinterpret_cast<std::uintptr_t>(module);
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        return false;
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + static_cast<std::uintptr_t>(dos->e_lfanew));
+    if (nt->Signature != IMAGE_NT_SIGNATURE)
+        return false;
+    const auto target = reinterpret_cast<std::uintptr_t>(address);
+    return target >= base && target < base + nt->OptionalHeader.SizeOfImage;
 }
 
 // MD5 of `size` bytes at `data` into `out`, by Windows (BCrypt, with its own hash object: Windows 7 and later); false if it
@@ -791,6 +825,10 @@ int run_game(const BootInfo& boot)
     g_login = boot.login;
     g_server_host = boot.server;
     g_view_relay_port = 0;
+    g_startup_trace = boot.settings_ini[0] != L'\0' &&
+                      GetPrivateProfileIntW(L"logging", L"startup.trace", 0, boot.settings_ini) != 0;
+    if (g_startup_trace)
+        log::write(L"Startup trace: run_game entered (tid=%lu, t=%llu ms)", GetCurrentThreadId(), GetTickCount64());
     if (!md5(g_login.session_hash, sizeof(g_login.session_hash), g_session_value)) {
         std::memset(g_session_value, 0, sizeof(g_session_value));
         log::write(L"Game start: Windows couldn't work out the session value (MD5): zeros, which servers since "
@@ -905,6 +943,12 @@ int run_game(const BootInfo& boot)
             table[kShowError] = reinterpret_cast<Command>(&show_error);
             VirtualProtect(&table[kShowError], sizeof(Command), protect, &protect);
         }
+        if (in_module_image(polcore_module, reinterpret_cast<const void*>(table[kDecryptPatchVer])) &&
+            VirtualProtect(&table[kDecryptPatchVer], sizeof(Command), PAGE_EXECUTE_READWRITE, &protect)) {
+            g_decrypt_patch_ver = reinterpret_cast<DecryptPatchVerFn>(table[kDecryptPatchVer]);
+            table[kDecryptPatchVer] = reinterpret_cast<Command>(&decrypt_patch_ver_observer);
+            VirtualProtect(&table[kDecryptPatchVer], sizeof(Command), protect, &protect);
+        }
         if (VirtualProtect(&table[kSessionValue], sizeof(Command), PAGE_EXECUTE_READWRITE, &protect)) {
             table[kSessionValue] = reinterpret_cast<Command>(&session_value);
             VirtualProtect(&table[kSessionValue], sizeof(Command), protect, &protect);
@@ -917,14 +961,30 @@ int run_game(const BootInfo& boot)
                        GetLastError());
         }
         const ULONGLONG started = GetTickCount64();
+        if (g_startup_trace)
+            log::write(L"Startup trace: invoking IFFXiEntry::GameStart (tid=%lu, t=%llu ms)",
+                       GetCurrentThreadId(), started);
         IUnknown* message = nullptr;
         const HRESULT ended = call(game, kGameStart, static_cast<IUnknown*>(polcore), &message);
         if (message != nullptr)
             message->Release();
-        log::write(L"Game start: FFXI has closed (0x%08lX, after %llu ms)", static_cast<unsigned long>(ended),
-                   GetTickCount64() - started);
-        shutdown::run(L"FFXI has closed");
-        result = 0;
+        const ULONGLONG elapsed = GetTickCount64() - started;
+        if (g_startup_trace)
+            log::write(L"Startup trace: IFFXiEntry::GameStart returned 0x%08lX (d3d_reached=%d, tid=%lu, elapsed=%llu ms)",
+                       static_cast<unsigned long>(ended), overlay::direct3d_reached() ? 1 : 0,
+                       GetCurrentThreadId(), elapsed);
+        if (!overlay::direct3d_reached()) {
+            log::write(L"Game start: FFXI exited before Direct3D initialization (0x%08lX, after %llu ms); "
+                       L"treating as startup failure",
+                       static_cast<unsigned long>(ended), elapsed);
+            shutdown::run(L"FFXI exited before Direct3D initialization");
+            result = kExitGameStartFailed;
+        } else {
+            log::write(L"Game start: FFXI has closed (0x%08lX, after %llu ms)", static_cast<unsigned long>(ended),
+                       elapsed);
+            shutdown::run(L"FFXI has closed");
+            result = 0;
+        }
     } while (false);
 
     if (game != nullptr)

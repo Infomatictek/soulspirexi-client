@@ -848,7 +848,7 @@ std::optional<Value> stand_in_value(std::wstring_view path, const char* name)
     if (!has_stand_in_value(name))
         return std::nullopt;
     const std::optional<StandInPlace> place = stand_in_place(path);
-    if (!place || !place->stand_in)
+    if (!place || (!place->stand_in && !is(place->key, L"Interface")))
         return std::nullopt;
     const char* wanted = name != nullptr ? name : "";
     for (const StandInValue& entry : kStandInValues) {
@@ -984,6 +984,29 @@ LSTATUS open_stand_in(HKEY parent, LPCSTR subkey, REGSAM access, PHKEY result, L
     const std::optional<StandInPlace> place = stand_in_place(path);
     if (!place || result == nullptr)
         return ERROR_FILE_NOT_FOUND;
+
+    // PlayOnline encrypts FINAL FANTASY XI\patch.ver with the install-specific hex key stored in the
+    // real Windows registry under HKLM\SOFTWARE\WOW6432Node\PlayOnline*\Interface\0001. Shadowing
+    // Interface with an empty stand-in (defaulting 0001 to "0") causes polcore's patch.ver decryption
+    // to fail and FFXiMain.dll to exit silently before creating its window or calling Direct3DCreate8.
+    // Open the real HKLM Interface key read-only first (never modifying the user's registry); fall back
+    // to the stand-in key only when no real PlayOnline Interface key exists on this machine.
+    if (is(place->key, L"Interface") && !place->stand_in && disposition == nullptr) {
+        const auto open = g_open_key != nullptr ? g_open_key : &RegOpenKeyExA;
+        HKEY real_key = nullptr;
+        if (open(parent, subkey, 0, read_only_access(access), &real_key) == ERROR_SUCCESS) {
+            *result = real_key;
+            bool first = false;
+            {
+                std::lock_guard lock(g_stand_in_mutex);
+                first = g_stand_in_logged.insert(L"real:" + place->root + L"\\" + place->key).second;
+            }
+            if (first)
+                log::write(L"Registry: %ls opened from the real Windows registry (read-only) for PlayOnline patch.ver verification",
+                           path.c_str());
+            return ERROR_SUCCESS;
+        }
+    }
 
     std::wstring stand_in = std::wstring(kStandInRoot) + L"\\" + place->root;
     if (!place->subkey.empty())

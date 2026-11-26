@@ -21,4 +21,7 @@ void settings_changed();
 // True inside the game's Present, while VanaCore's hook runs there (plugins', addons' and VanaCore's own frame). The game's thread.
 bool in_present();
 
+// True once FFXiMain.dll has invoked Direct3DCreate8 in this process. Any thread.
+bool direct3d_reached();
+
 } // namespace vanacore::overlay

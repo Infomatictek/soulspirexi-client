@@ -1086,10 +1086,16 @@ HRESULT __stdcall reset(void* device, d3d8::PresentParameters* params)
     return g_reset(device, params);
 }
 
+std::atomic<bool> g_direct3d_reached{false};
+bool g_startup_trace = false;
+
 HRESULT __stdcall create_device(void* d3d, UINT adapter, DWORD type, HWND focus, DWORD flags,
                                 d3d8::PresentParameters* params, void** device)
 {
     const HRESULT result = g_create_device(d3d, adapter, type, focus, flags, params, device);
+    if (g_startup_trace)
+        log::write(L"Startup trace: IDirect3D8::CreateDevice returned 0x%08lX (tid=%lu, t=%llu ms)",
+                   static_cast<unsigned long>(result), GetCurrentThreadId(), GetTickCount64());
     if (FAILED(result) || device == nullptr || *device == nullptr)
         return result;
     imports::hook_vtable(*device, slot::Reset, &reset, g_reset);
@@ -1119,6 +1125,10 @@ HRESULT __stdcall create_device(void* d3d, UINT adapter, DWORD type, HWND focus,
 
 void* WINAPI direct3d_create(UINT sdk_version)
 {
+    g_direct3d_reached.store(true, std::memory_order_release);
+    if (g_startup_trace)
+        log::write(L"Startup trace: Direct3DCreate8 entered (sdk=%u, tid=%lu, t=%llu ms)",
+                   sdk_version, GetCurrentThreadId(), GetTickCount64());
     // [graphics] renderer=d3d12: VanaCore's own Direct3D 8, on Direct3D 12 (hooked below like the real one)
     void* d3d = graphics::direct3d_create();
     if (d3d == nullptr)
@@ -1292,6 +1302,7 @@ void install(const wchar_t* ini, std::wstring title, std::wstring label, std::ws
     if (ini != nullptr && ini[0] != L'\0') {
         g_ini = ini;
         g_ini_time = ini_time();
+        g_startup_trace = GetPrivateProfileIntW(L"logging", L"startup.trace", 0, ini) != 0;
         read_settings(ini);
         log_style();
     }
@@ -1314,6 +1325,11 @@ void settings_changed()
 bool in_present()
 {
     return g_in_present;
+}
+
+bool direct3d_reached()
+{
+    return g_direct3d_reached.load(std::memory_order_acquire);
 }
 
 } // namespace vanacore::overlay
