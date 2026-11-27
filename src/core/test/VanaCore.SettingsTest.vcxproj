@@ -73,6 +73,7 @@
     <ClInclude Include="..\..\launcher\login.hpp" />
     <ClInclude Include="..\..\shared\vanacore\boot_info.hpp" />
     <ClInclude Include="..\..\shared\vanacore\tls_client.hpp" />
+    <ClInclude Include="..\soulspire\echoes_rebrand.hpp" />
     <ClInclude Include="..\soulspire\state.hpp" />
     <ClInclude Include="..\soulspire\packets.hpp" />
     <ClInclude Include="..\soulspire\input_ownership.hpp" />
