@@ -321,6 +321,7 @@ void EngineState::reset_all()
     visibility_.clear();
     companion_spells_.clear();
     companion_hash_.clear();
+    companion_category_label_ = "Soul Companions";
     companions_enabled_.store(false, std::memory_order_release);
     weapon_rules_.clear();
     appearance_masks_.clear();
@@ -937,6 +938,7 @@ bool EngineState::load_companions_json(std::string_view json_text)
 
     std::unordered_map<std::uint16_t, CompanionSpellEntry> next_spells;
     std::string next_hash;
+    std::string next_category = "Soul Companions";
 
     while (!s.take('}')) {
         std::string key;
@@ -944,6 +946,9 @@ bool EngineState::load_companions_json(std::string_view json_text)
             return false;
         if (key == "companionHash") {
             if (!s.parse_string(next_hash))
+                return false;
+        } else if (key == "categoryLabel") {
+            if (!s.parse_string(next_category))
                 return false;
         } else if (key == "companions") {
             if (!s.take('['))
@@ -990,7 +995,14 @@ bool EngineState::load_companions_json(std::string_view json_text)
     std::lock_guard lock(mutex_);
     companion_spells_ = std::move(next_spells);
     companion_hash_ = std::move(next_hash);
+    companion_category_label_ = next_category.empty() ? std::string("Soul Companions") : std::move(next_category);
     return true;
+}
+
+std::string EngineState::companion_category_label() const
+{
+    std::lock_guard lock(mutex_);
+    return companion_category_label_.empty() ? std::string("Soul Companions") : companion_category_label_;
 }
 
 bool EngineState::observe_sscmp_frame(std::string_view payload)

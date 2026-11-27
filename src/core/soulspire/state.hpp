@@ -239,6 +239,7 @@ public:
     void set_companions_enabled(bool on) noexcept;
     bool companions_enabled() const noexcept { return companions_enabled_.load(std::memory_order_acquire); }
     std::uint32_t companion_spell_count() const;
+    std::string companion_category_label() const;
 
     // Identity queries & updates.
     bool resolve_label(std::uint8_t job, std::uint8_t branch, bool full, std::string& out) const;
@@ -332,6 +333,7 @@ private:
     std::unordered_map<std::uint64_t, VisibilityRecord> visibility_;
     std::unordered_map<std::uint16_t, CompanionSpellEntry> companion_spells_;
     std::string companion_hash_;
+    std::string companion_category_label_ = "Soul Companions";
 
     std::vector<WeaponRuleRecord> weapon_rules_;
     std::vector<AppearanceMaskRecord> appearance_masks_;
