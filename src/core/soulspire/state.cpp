@@ -324,10 +324,10 @@ void EngineState::reset_all()
     ranged_only_.clear();
     peers_.clear();
     weapon_config_hash_.clear();
-    local_equip_main_item_id_.store(0, std::memory_order_relaxed);
-    local_equip_main_skill_.store(0, std::memory_order_relaxed);
-    local_equip_sub_item_id_.store(0, std::memory_order_relaxed);
-    local_equip_sub_skill_.store(0, std::memory_order_relaxed);
+    local_equip_main_item_id_ = 0;
+    local_equip_main_skill_ = 0;
+    local_equip_sub_item_id_ = 0;
+    local_equip_sub_skill_ = 0;
     hud_ = {};
     mobs_.clear();
     packets_1ff_ = packets_1fc_ = packets_1fd_ = packets_1fe_ = 0;
@@ -342,10 +342,10 @@ void EngineState::reset_session()
     std::lock_guard lock(mutex_);
     active_ = {};
     peers_.clear();
-    local_equip_main_item_id_.store(0, std::memory_order_relaxed);
-    local_equip_main_skill_.store(0, std::memory_order_relaxed);
-    local_equip_sub_item_id_.store(0, std::memory_order_relaxed);
-    local_equip_sub_skill_.store(0, std::memory_order_relaxed);
+    local_equip_main_item_id_ = 0;
+    local_equip_main_skill_ = 0;
+    local_equip_sub_item_id_ = 0;
+    local_equip_sub_skill_ = 0;
     hud_.soul_key.clear();
     hud_.kv.clear();
     hud_.updated_ms = 0;
@@ -977,12 +977,13 @@ bool EngineState::allows_2h_main_with_sub(std::uint16_t main_skill, std::uint16_
 }
 
 void EngineState::record_local_equipped_weapons(std::uint16_t main_item_id, std::uint16_t main_skill,
-                                                std::uint16_t sub_item_id, std::uint16_t sub_skill) noexcept
+                                                std::uint16_t sub_item_id, std::uint16_t sub_skill)
 {
-    local_equip_main_item_id_.store(main_item_id, std::memory_order_relaxed);
-    local_equip_main_skill_.store(main_skill, std::memory_order_relaxed);
-    local_equip_sub_item_id_.store(sub_item_id, std::memory_order_relaxed);
-    local_equip_sub_skill_.store(sub_skill, std::memory_order_relaxed);
+    std::lock_guard lock(mutex_);
+    local_equip_main_item_id_ = main_item_id;
+    local_equip_main_skill_ = main_skill;
+    local_equip_sub_item_id_ = sub_item_id;
+    local_equip_sub_skill_ = sub_skill;
 }
 
 void EngineState::upsert_peer_soul(std::uint32_t actor_id, std::uint8_t job, std::uint8_t branch,
@@ -1025,13 +1026,15 @@ bool EngineState::authorizes_sub_main_namespace(std::uint32_t actor_id, std::uin
         job = active_.job;
         branch = active_.branch;
         eff_level = active_.effective_level;
-        main_item_id = local_equip_main_item_id_.load(std::memory_order_relaxed);
-        main_skill   = local_equip_main_skill_.load(std::memory_order_relaxed);
-        sub_item_id  = local_equip_sub_item_id_.load(std::memory_order_relaxed);
-        sub_skill    = local_equip_sub_skill_.load(std::memory_order_relaxed);
-        if (main_skill == 0 || sub_skill == 0)
+        main_item_id = local_equip_main_item_id_;
+        main_skill   = local_equip_main_skill_;
+        sub_item_id  = local_equip_sub_item_id_;
+        sub_skill    = local_equip_sub_skill_;
+        if (main_skill != 0 && sub_skill != 0) {
+            has_equipped_skills = true;
+        } else if (sub_model_id == 84u) {
             return false;
-        has_equipped_skills = true;
+        }
     } else {
         if (sub_model_id == 84u)
             return false;

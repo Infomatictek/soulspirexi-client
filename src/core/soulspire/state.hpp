@@ -254,7 +254,7 @@ public:
     bool allows_2h_main_with_sub(std::uint16_t main_skill, std::uint16_t main_item_id,
                                  std::uint16_t sub_skill, std::uint16_t sub_item_id) const;
     void record_local_equipped_weapons(std::uint16_t main_item_id, std::uint16_t main_skill,
-                                       std::uint16_t sub_item_id, std::uint16_t sub_skill) noexcept;
+                                       std::uint16_t sub_item_id, std::uint16_t sub_skill);
     void upsert_peer_soul(std::uint32_t actor_id, std::uint8_t job, std::uint8_t branch,
                           std::uint8_t effective_level, std::uint64_t now_ms);
     bool authorizes_sub_main_namespace(std::uint32_t actor_id, std::uint16_t sub_model_id,
@@ -315,10 +315,10 @@ private:
     std::vector<RangedOnlyRecord> ranged_only_;
     std::unordered_map<std::uint32_t, PeerSoulRecord> peers_;
     std::string weapon_config_hash_;
-    std::atomic<std::uint16_t> local_equip_main_item_id_{0};
-    std::atomic<std::uint16_t> local_equip_main_skill_{0};
-    std::atomic<std::uint16_t> local_equip_sub_item_id_{0};
-    std::atomic<std::uint16_t> local_equip_sub_skill_{0};
+    std::uint16_t local_equip_main_item_id_ = 0;
+    std::uint16_t local_equip_main_skill_ = 0;
+    std::uint16_t local_equip_sub_item_id_ = 0;
+    std::uint16_t local_equip_sub_skill_ = 0;
 
     HudSnapshot hud_{};
     std::unordered_map<std::uint32_t, MobStatusSnapshot> mobs_;
