@@ -27,12 +27,12 @@ end
 
 -- Plugins VanaCore refuses because it is them (its own addon host, Sequencer): not listed, as data.lua's HIDDEN_PLUGINS
 local HIDDEN_PLUGINS = { addons = true, sequencer = true }
--- first in the list whatever the name; keybinds (always on) and the ones CatsEyeXI requires (they stay loaded) can't be
--- switched off
-local FIRST = { addon = { vana = 1, keybinds = 2, customcolors = 3 }, plugin = { cexidats = 1, cexislots = 2 } }
-local FIXED = { addon = { keybinds = true, customcolors = true }, plugin = { cexidats = true, cexislots = true } }
+-- first in the list whatever the name; keybinds (always on) and SoulspireXI's protected core addon (stays loaded)
+-- can't be switched off
+local FIRST = { addon = { vana = 1, keybinds = 2, soulspire_core = 3 }, plugin = {} }
+local FIXED = { addon = { keybinds = true, soulspire_core = true }, plugin = {} }
 
--- whether CatsEyeXI requires the addon or plugin (its page's Unload doesn't show)
+-- whether SoulspireXI requires the addon or plugin (its page's Unload doesn't show)
 function M.extension_fixed(what, name)
     return FIXED[what] ~= nil and FIXED[what][name:lower()] == true
 end
