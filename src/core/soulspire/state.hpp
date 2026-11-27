@@ -86,6 +86,40 @@ struct CompanionSpellEntry {
     std::string description;
 };
 
+// SOUL-SPELL-001: Universal registry-driven Dynamic Spellbook metadata & live runtime state.
+struct DynamicSpellEntry {
+    std::uint16_t spell_id = 0;
+    std::uint8_t job_id = 0;
+    std::uint8_t branch_id = 0;
+    std::uint8_t unlock_level = 1;
+    std::uint16_t client_magic_type = 2;    // 2 = Black Magic
+    std::uint16_t client_element = 7;       // 7 = Dark
+    std::uint16_t client_valid_targets = 1; // 0x01=Self, 0x05=Self/Party, 0x20=Enemy
+    std::uint16_t server_skill = 37;        // 37 = Dark Magic
+    std::uint16_t mp_cost = 0;
+    std::uint8_t client_cast_qsec = 4;
+    std::uint8_t client_recast_qsec = 32;
+    std::string soul_key;
+    std::string name;
+    std::string description;
+};
+
+struct DynamicSpellbookRuntime {
+    bool active = false;
+    bool replace_base = false;
+    bool replace_base_abilities = false;
+    std::string soul_key;
+    std::uint8_t level = 0;
+    std::string pet_type;
+    bool pet_alive = false;
+    bool pet_defeated = false;
+    bool pet_owned = false;
+    std::uint16_t weapon_skill = 0;
+    std::string stance;
+    std::vector<std::uint16_t> allowed_spells;
+    std::vector<std::uint16_t> allowed_abilities;
+};
+
 struct ActiveSoul {
     std::uint32_t character_id = 0;
     std::uint8_t job = 0;
@@ -233,6 +267,16 @@ public:
     bool load_identities_json(std::string_view json_text, std::string_view source_label);
     bool load_weapon_config_json(std::string_view json_text);
     bool load_companions_json(std::string_view json_text);
+    bool load_dynamic_spellbooks_json(std::string_view json_text);
+
+    // SOUL-SPELL-001: Universal Dynamic Spellbook live sync & queries.
+    bool observe_ssdsb_frame(std::string_view payload);
+    bool dynamic_spellbook_active() const;
+    std::uint32_t dynamic_spell_count() const;
+    std::vector<DynamicSpellEntry> all_dynamic_spells() const;
+    std::uint32_t dynamic_spellbook_generation() const noexcept {
+        return dynamic_spellbook_gen_.load(std::memory_order_acquire);
+    }
 
     // QA-SOUL-COMPANIONS-001: Fail-closed tester-exclusive Soul Echoes Magic visibility.
     bool observe_sscmp_frame(std::string_view payload);
@@ -315,6 +359,7 @@ private:
 
     std::atomic<bool> enabled_{false};
     std::atomic<bool> companions_enabled_{false};
+    std::atomic<std::uint32_t> dynamic_spellbook_gen_{0};
     std::atomic<std::uint32_t> capabilities_{0};
     std::atomic<std::uint32_t> action_row_limit_{16};
     std::atomic<std::uint32_t> pending_core_opens_{0};
@@ -336,6 +381,10 @@ private:
     std::string companion_hash_;
     std::string companion_category_label_ = "Echoes";
     std::string companion_system_name_ = "Soul Echoes";
+
+    std::unordered_map<std::uint16_t, DynamicSpellEntry> dynamic_spells_;
+    std::string dynamic_spellbook_hash_;
+    DynamicSpellbookRuntime dynamic_runtime_{};
 
     std::vector<WeaponRuleRecord> weapon_rules_;
     std::vector<AppearanceMaskRecord> appearance_masks_;

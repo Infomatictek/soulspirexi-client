@@ -324,6 +324,10 @@ void EngineState::reset_all()
     companion_category_label_ = "Echoes";
     companion_system_name_ = "Soul Echoes";
     companions_enabled_.store(false, std::memory_order_release);
+    dynamic_spells_.clear();
+    dynamic_spellbook_hash_.clear();
+    dynamic_runtime_ = {};
+    dynamic_spellbook_gen_.store(0, std::memory_order_release);
     weapon_rules_.clear();
     appearance_masks_.clear();
     ranged_only_.clear();
@@ -356,6 +360,7 @@ void EngineState::reset_session()
     hud_.updated_ms = 0;
     mobs_.clear();
     companions_enabled_.store(false, std::memory_order_release);
+    dynamic_runtime_ = {};
 }
 
 bool EngineState::load_identities_json(std::string_view json_text, std::string_view source_label)
@@ -829,6 +834,21 @@ bool EngineState::lookup_action(ActionKind kind, std::uint16_t action_id, Action
         out.description = cit->second.description;
         return true;
     }
+    if (kind == ActionKind::Spell) {
+        const auto dit = dynamic_spells_.find(action_id);
+        if (dit != dynamic_spells_.end()) {
+            if (!dynamic_runtime_.active || dynamic_runtime_.soul_key != dit->second.soul_key)
+                return false;
+            out = {};
+            out.job = dit->second.job_id;
+            out.branch = dit->second.branch_id;
+            out.kind = ActionKind::Spell;
+            out.action_id = action_id;
+            out.name = dit->second.name;
+            out.description = dit->second.description;
+            return true;
+        }
+    }
     if (!active_.known || active_.job < 1 || active_.job > 22 || active_.branch < 1 || active_.branch > 3)
         return false;
     const auto it = actions_.find(make_action_key(active_.job, active_.branch, kind, action_id));
@@ -913,6 +933,27 @@ VisibilityDecision EngineState::decide_visibility(ActionKind kind, std::uint16_t
         if (!companions_enabled_.load(std::memory_order_acquire))
             return VisibilityDecision::Hide;
         return companion_spells_.count(action_id) > 0 ? VisibilityDecision::Show : VisibilityDecision::Hide;
+    }
+    if (kind == ActionKind::Spell) {
+        const bool is_dynamic_slot = dynamic_spells_.count(action_id) > 0;
+        if (dynamic_runtime_.active) {
+            for (const std::uint16_t allowed_id : dynamic_runtime_.allowed_spells) {
+                if (allowed_id == action_id)
+                    return VisibilityDecision::Show;
+            }
+            if (is_dynamic_slot || dynamic_runtime_.replace_base)
+                return VisibilityDecision::Hide;
+        } else if (is_dynamic_slot) {
+            return VisibilityDecision::Hide;
+        }
+    }
+    if (kind == ActionKind::Ability && dynamic_runtime_.active && dynamic_runtime_.replace_base_abilities) {
+        const std::uint16_t server_id = action_id >= 512u ? static_cast<std::uint16_t>(action_id - 512u) : action_id;
+        for (const std::uint16_t allowed_id : dynamic_runtime_.allowed_abilities) {
+            if (allowed_id == action_id || allowed_id == server_id)
+                return VisibilityDecision::Show;
+        }
+        return VisibilityDecision::Hide;
     }
     if (!active_.known || active_.job < 1 || active_.job > 22 || active_.branch < 1 || active_.branch > 3)
         return VisibilityDecision::Unmanaged;
@@ -1054,6 +1095,248 @@ std::uint32_t EngineState::companion_spell_count() const
 {
     std::lock_guard lock(mutex_);
     return static_cast<std::uint32_t>(companion_spells_.size());
+}
+
+bool EngineState::load_dynamic_spellbooks_json(std::string_view json_text)
+{
+    if (json_text.empty() || json_text.size() > 512 * 1024)
+        return false;
+    JsonScan s{json_text.data(), json_text.data() + json_text.size()};
+    if (!s.take('{'))
+        return false;
+
+    std::unordered_map<std::uint16_t, DynamicSpellEntry> next_spells;
+    std::string next_hash;
+
+    while (!s.take('}')) {
+        std::string key;
+        if (!s.parse_string(key) || !s.take(':'))
+            return false;
+        if (key == "spellbookHash") {
+            if (!s.parse_string(next_hash))
+                return false;
+        } else if (key == "spellbooks") {
+            if (!s.take('['))
+                return false;
+            while (!s.take(']')) {
+                if (!s.take('{'))
+                    return false;
+                std::string soul_key;
+                std::int64_t job_id = 0, branch_id = 0;
+                std::vector<DynamicSpellEntry> book_spells;
+                while (!s.take('}')) {
+                    std::string bkey;
+                    if (!s.parse_string(bkey) || !s.take(':'))
+                        return false;
+                    if (bkey == "canonicalKey") {
+                        if (!s.parse_string(soul_key)) return false;
+                    } else if (bkey == "jobId") {
+                        if (!s.parse_int(job_id)) return false;
+                    } else if (bkey == "branchId") {
+                        if (!s.parse_int(branch_id)) return false;
+                    } else if (bkey == "spells") {
+                        if (!s.take('[')) return false;
+                        while (!s.take(']')) {
+                            if (!s.take('{')) return false;
+                            DynamicSpellEntry rec{};
+                            while (!s.take('}')) {
+                                std::string fkey;
+                                if (!s.parse_string(fkey) || !s.take(':')) return false;
+                                if (fkey == "spellId") {
+                                    std::int64_t v = 0;
+                                    if (!s.parse_int(v)) return false;
+                                    if (v >= 1 && v <= 1023) rec.spell_id = static_cast<std::uint16_t>(v);
+                                } else if (fkey == "name") {
+                                    if (!s.parse_string(rec.name)) return false;
+                                } else if (fkey == "description") {
+                                    if (!s.parse_string(rec.description)) return false;
+                                } else if (fkey == "clientMagicType") {
+                                    std::int64_t v = 2;
+                                    if (!s.parse_int(v)) return false;
+                                    rec.client_magic_type = static_cast<std::uint16_t>(v);
+                                } else if (fkey == "clientElement") {
+                                    std::int64_t v = 7;
+                                    if (!s.parse_int(v)) return false;
+                                    rec.client_element = static_cast<std::uint16_t>(v);
+                                } else if (fkey == "clientValidTargets") {
+                                    std::int64_t v = 1;
+                                    if (!s.parse_int(v)) return false;
+                                    rec.client_valid_targets = static_cast<std::uint16_t>(v);
+                                } else if (fkey == "serverSkill") {
+                                    std::int64_t v = 37;
+                                    if (!s.parse_int(v)) return false;
+                                    rec.server_skill = static_cast<std::uint16_t>(v);
+                                } else if (fkey == "mpCost") {
+                                    std::int64_t v = 0;
+                                    if (!s.parse_int(v)) return false;
+                                    rec.mp_cost = static_cast<std::uint16_t>(v);
+                                } else if (fkey == "clientCastQuarterSec") {
+                                    std::int64_t v = 4;
+                                    if (!s.parse_int(v)) return false;
+                                    rec.client_cast_qsec = static_cast<std::uint8_t>(v);
+                                } else if (fkey == "clientRecastQuarterSec") {
+                                    std::int64_t v = 32;
+                                    if (!s.parse_int(v)) return false;
+                                    rec.client_recast_qsec = static_cast<std::uint8_t>(v);
+                                } else if (fkey == "unlockLevel") {
+                                    std::int64_t v = 1;
+                                    if (!s.parse_int(v)) return false;
+                                    rec.unlock_level = static_cast<std::uint8_t>(v);
+                                } else {
+                                    if (!s.skip_value()) return false;
+                                }
+                                s.take(',');
+                            }
+                            if (rec.spell_id >= 1 && rec.spell_id <= 1023 && !rec.name.empty()) {
+                                rec.name = sanitize_ascii(rec.name, 79);
+                                rec.description = sanitize_ascii(rec.description, 191);
+                                if (!rec.name.empty())
+                                    book_spells.push_back(std::move(rec));
+                            }
+                            s.take(',');
+                        }
+                    } else {
+                        if (!s.skip_value()) return false;
+                    }
+                    s.take(',');
+                }
+                const std::string norm_soul = normalize_soul_key(soul_key);
+                for (auto& rec : book_spells) {
+                    rec.soul_key = norm_soul;
+                    rec.job_id = static_cast<std::uint8_t>(job_id);
+                    rec.branch_id = static_cast<std::uint8_t>(branch_id);
+                    next_spells[rec.spell_id] = std::move(rec);
+                }
+                s.take(',');
+            }
+        } else {
+            if (!s.skip_value())
+                return false;
+        }
+        s.take(',');
+    }
+
+    if (next_spells.empty())
+        return false;
+
+    std::lock_guard lock(mutex_);
+    dynamic_spells_ = std::move(next_spells);
+    dynamic_spellbook_hash_ = std::move(next_hash);
+    dynamic_spellbook_gen_.fetch_add(1, std::memory_order_acq_rel);
+    return true;
+}
+
+bool EngineState::observe_ssdsb_frame(std::string_view payload)
+{
+    if (payload.empty())
+        return false;
+
+    DynamicSpellbookRuntime next{};
+    bool parsed = false;
+    std::size_t pos = 0;
+    while (pos < payload.size()) {
+        const std::size_t bar = payload.find('|', pos);
+        const std::string_view part = (bar == std::string_view::npos)
+            ? payload.substr(pos)
+            : payload.substr(pos, bar - pos);
+        const std::size_t eq = part.find('=');
+        if (eq != std::string_view::npos && eq > 0) {
+            const std::string_view k = part.substr(0, eq);
+            const std::string_view v = part.substr(eq + 1);
+            if (k == "active") {
+                next.active = (v == "1" || v == "true");
+                parsed = true;
+            } else if (k == "replace_base") {
+                next.replace_base = (v == "1" || v == "true");
+            } else if (k == "replace_base_abilities") {
+                next.replace_base_abilities = (v == "1" || v == "true");
+            } else if (k == "soul") {
+                next.soul_key = normalize_soul_key(v);
+            } else if (k == "level") {
+                std::uint32_t lv = 0;
+                if (std::from_chars(v.data(), v.data() + v.size(), lv).ec == std::errc{})
+                    next.level = static_cast<std::uint8_t>(lv);
+            } else if (k == "pet_type") {
+                next.pet_type = to_lower_ascii(v);
+            } else if (k == "pet_alive") {
+                next.pet_alive = (v == "1" || v == "true");
+            } else if (k == "pet_defeated") {
+                next.pet_defeated = (v == "1" || v == "true");
+            } else if (k == "pet_owned") {
+                next.pet_owned = (v == "1" || v == "true");
+            } else if (k == "weapon_skill") {
+                std::uint32_t ws = 0;
+                if (std::from_chars(v.data(), v.data() + v.size(), ws).ec == std::errc{})
+                    next.weapon_skill = static_cast<std::uint16_t>(ws);
+            } else if (k == "stance") {
+                next.stance = to_lower_ascii(v);
+            } else if (k == "allowed") {
+                std::size_t cpos = 0;
+                while (cpos < v.size()) {
+                    const std::size_t comma = v.find(',', cpos);
+                    const std::string_view tok = (comma == std::string_view::npos)
+                        ? v.substr(cpos)
+                        : v.substr(cpos, comma - cpos);
+                    std::uint32_t sid = 0;
+                    if (!tok.empty() && std::from_chars(tok.data(), tok.data() + tok.size(), sid).ec == std::errc{} &&
+                        sid >= 1 && sid <= 1023) {
+                        next.allowed_spells.push_back(static_cast<std::uint16_t>(sid));
+                    }
+                    if (comma == std::string_view::npos)
+                        break;
+                    cpos = comma + 1;
+                }
+            } else if (k == "allowed_abilities") {
+                std::size_t cpos = 0;
+                while (cpos < v.size()) {
+                    const std::size_t comma = v.find(',', cpos);
+                    const std::string_view tok = (comma == std::string_view::npos)
+                        ? v.substr(cpos)
+                        : v.substr(cpos, comma - cpos);
+                    std::uint32_t aid = 0;
+                    if (!tok.empty() && std::from_chars(tok.data(), tok.data() + tok.size(), aid).ec == std::errc{} &&
+                        aid <= 2047) {
+                        next.allowed_abilities.push_back(static_cast<std::uint16_t>(aid));
+                    }
+                    if (comma == std::string_view::npos)
+                        break;
+                    cpos = comma + 1;
+                }
+            }
+        }
+        if (bar == std::string_view::npos)
+            break;
+        pos = bar + 1;
+    }
+
+    if (!parsed)
+        return false;
+
+    std::lock_guard lock(mutex_);
+    dynamic_runtime_ = std::move(next);
+    return true;
+}
+
+bool EngineState::dynamic_spellbook_active() const
+{
+    std::lock_guard lock(mutex_);
+    return dynamic_runtime_.active;
+}
+
+std::uint32_t EngineState::dynamic_spell_count() const
+{
+    std::lock_guard lock(mutex_);
+    return static_cast<std::uint32_t>(dynamic_spells_.size());
+}
+
+std::vector<DynamicSpellEntry> EngineState::all_dynamic_spells() const
+{
+    std::lock_guard lock(mutex_);
+    std::vector<DynamicSpellEntry> out;
+    out.reserve(dynamic_spells_.size());
+    for (const auto& [sid, rec] : dynamic_spells_)
+        out.push_back(rec);
+    return out;
 }
 
 bool EngineState::has_weapon_rules_for_active() const
