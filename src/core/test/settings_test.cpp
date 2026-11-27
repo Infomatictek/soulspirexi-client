@@ -503,7 +503,14 @@ int main()
         check(st.allows_dual_2h_menu_item(6, 18001), "Berserker Sub-slot picker allows Great Axe");
         check(st.allows_2h_main_with_sub(6, 18000, 6, 18001), "Berserker allows 2H Great Axe Main with Great Axe Sub");
         st.record_local_equipped_weapons(18000, 6, 18001, 6);
-        check(st.authorizes_sub_main_namespace(cid, 0x0120u, 255),
+        const bool local_remap_ok = st.authorizes_sub_main_namespace(cid, 0x0120u, 255);
+        if (!local_remap_ok) {
+            const auto a = st.active_soul();
+            const auto d = st.diagnostics();
+            printf("FAIL: diag enabled=%d cid=%u a.cid=%u job=%u br=%u lv=%u known=%d rules=%u\n",
+                   (int)st.enabled(), cid, a.character_id, a.job, a.branch, a.effective_level, (int)a.known, d.weapon_rule_count);
+        }
+        check(local_remap_ok,
               "Berserker dual Great Axe authorizes PC Sub->Main FTABLE model namespace");
         check(!st.authorizes_sub_main_namespace(cid, 0x0010u, 255) && !st.authorizes_sub_main_namespace(cid, 0x0080u, 255),
               "Vanilla shield model ranges NEVER remap to Main FTABLE namespace");
