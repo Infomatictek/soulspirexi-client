@@ -399,12 +399,75 @@ void* __cdecl hook_ability_icon(std::uint32_t v1, std::uint32_t v2) noexcept
     return g_orig_ability_icon(v1, v2);
 }
 
+std::uint8_t* g_spell_res_table_base = nullptr;
+std::uint32_t g_spell_res_applied_gen = 0;
+std::unordered_map<std::uint16_t, std::array<std::uint8_t, 100>> g_spell_res_originals;
+
+void restore_dynamic_spell_res_table() noexcept
+{
+    if (g_spell_res_table_base == nullptr || g_spell_res_originals.empty())
+        return;
+    for (const auto& [sid, orig] : g_spell_res_originals) {
+        if (sid >= 1 && sid <= 1023) {
+            std::memcpy(g_spell_res_table_base + static_cast<std::size_t>(sid) * 100u, orig.data(), orig.size());
+        }
+    }
+    g_spell_res_originals.clear();
+    g_spell_res_applied_gen = 0;
+}
+
+void sync_dynamic_spell_res_table(const std::uint8_t* observed_spell_res, std::uint16_t observed_id) noexcept
+{
+    if (observed_spell_res == nullptr || observed_id == 0 || observed_id > 1023)
+        return;
+    const std::uint32_t gen = engine().dynamic_spellbook_generation();
+    if (gen == 0 || (g_spell_res_table_base != nullptr && g_spell_res_applied_gen == gen))
+        return;
+
+    // Derive base of FFXiMain's 1024x100-byte spell resource table and sanity-check entry #1 (Cure).
+    std::uint8_t* candidate_base = const_cast<std::uint8_t*>(observed_spell_res) - static_cast<std::size_t>(observed_id) * 100u;
+    std::uint16_t cure_id = 0;
+    std::uint16_t cure_type = 0;
+    std::memcpy(&cure_id, candidate_base + 100u, sizeof(cure_id));
+    std::memcpy(&cure_type, candidate_base + 102u, sizeof(cure_type));
+    if (cure_id != 1u || cure_type != 1u)
+        return;
+
+    g_spell_res_table_base = candidate_base;
+    const auto spells = engine().all_dynamic_spells();
+    for (const auto& sp : spells) {
+        if (sp.spell_id == 0 || sp.spell_id > 1023)
+            continue;
+        std::uint8_t* entry = g_spell_res_table_base + static_cast<std::size_t>(sp.spell_id) * 100u;
+        if (g_spell_res_originals.find(sp.spell_id) == g_spell_res_originals.end()) {
+            std::array<std::uint8_t, 100> snap{};
+            std::memcpy(snap.data(), entry, snap.size());
+            g_spell_res_originals.emplace(sp.spell_id, snap);
+        }
+        std::memcpy(entry + 0, &sp.spell_id, sizeof(sp.spell_id));
+        std::memcpy(entry + 2, &sp.client_magic_type, sizeof(sp.client_magic_type));
+        std::memcpy(entry + 4, &sp.client_element, sizeof(sp.client_element));
+        std::memcpy(entry + 6, &sp.client_valid_targets, sizeof(sp.client_valid_targets));
+        std::memcpy(entry + 8, &sp.server_skill, sizeof(sp.server_skill));
+        std::memcpy(entry + 10, &sp.mp_cost, sizeof(sp.mp_cost));
+        entry[12] = sp.client_cast_qsec;
+        entry[13] = sp.client_recast_qsec;
+        // Set all job levels to 0xFF except the owning Soul's jobId at unlock_level.
+        std::memset(entry + 14, 0xFF, 24);
+        if (sp.job_id >= 1 && sp.job_id <= 22) {
+            entry[14 + sp.job_id] = sp.unlock_level;
+        }
+    }
+    g_spell_res_applied_gen = gen;
+}
+
 std::uint8_t __cdecl hook_magic_filter(const std::uint8_t* spell_res)
 {
     if (spell_res != nullptr) {
         std::uint16_t spell_id = 0;
         std::memcpy(&spell_id, spell_res, sizeof(spell_id));
         if (spell_id > 0 && spell_id <= 1023) {
+            sync_dynamic_spell_res_table(spell_res, spell_id);
             const VisibilityDecision d = engine().decide_visibility(ActionKind::Spell, spell_id);
             if (d == VisibilityDecision::Hide) {
                 engine().increment_hook_hit("magic_list_filter");
@@ -1839,6 +1902,7 @@ void uninstall()
     g_menuwind_next_button_patch.uninstall();
     g_can_equip_in_slot_patch.uninstall();
     g_model_part_add_mesh_patch.uninstall();
+    restore_dynamic_spell_res_table();
     clear_all_sub_offhand_meshes();
 }
 

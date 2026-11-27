@@ -118,6 +118,23 @@ bool reload_registries()
             log::write(L"Soulspire: failed to parse %ls", used.c_str());
         }
     }
+
+    const std::vector<std::wstring> dsb_paths = {
+        g_install_dir + L"\\addons\\soulspire_core\\data\\soul-dynamic-spellbooks.json",
+        g_install_dir + L"\\addons\\vanacore\\soulspire_core\\data\\soul-dynamic-spellbooks.json",
+        g_install_dir + L"\\data\\soul-dynamic-spellbooks.json",
+    };
+    json.clear();
+    used.clear();
+    if (load_first_existing(dsb_paths, json, used)) {
+        if (engine().load_dynamic_spellbooks_json(json)) {
+            log::write(L"Soulspire: loaded %u dynamic spellbook entries from %ls",
+                       engine().dynamic_spell_count(), used.c_str());
+            any_loaded = true;
+        } else {
+            log::write(L"Soulspire: failed to parse %ls", used.c_str());
+        }
+    }
     return any_loaded;
 }
 

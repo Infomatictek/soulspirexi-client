@@ -817,6 +817,122 @@ int main()
               "companion spell 897 hidden again after session reset");
     }
 
+    // SOUL-SPELL-001: Universal Dynamic Spellbook & Necromancer visibility/naming/suppression tests
+    {
+        using namespace vanacore::soulspire;
+        EngineState st;
+        st.set_enabled(true);
+        const char* dsb_json = R"json({
+            "schemaVersion": "1.0.0",
+            "spellbookHash": "dsbtest1",
+            "spellbooks": [
+                {
+                    "soulId": "blm_tank",
+                    "canonicalKey": "necromancer",
+                    "jobId": 4,
+                    "branchId": 3,
+                    "replaceBaseJobSpells": true,
+                    "spells": [
+                        {
+                            "spellId": 715,
+                            "slug": "raise_warrior",
+                            "name": "Raise Warrior",
+                            "description": "Summons the Dullahan.",
+                            "clientMagicType": 2,
+                            "clientElement": 7,
+                            "clientValidTargets": 1,
+                            "serverSkill": 37,
+                            "mpCost": 24,
+                            "clientCastQuarterSec": 12,
+                            "clientRecastQuarterSec": 120,
+                            "unlockLevel": 10
+                        },
+                        {
+                            "spellId": 723,
+                            "slug": "grave_cleaver",
+                            "name": "Grave Cleaver",
+                            "description": "Dullahan physical strike.",
+                            "clientMagicType": 2,
+                            "clientElement": 7,
+                            "clientValidTargets": 32,
+                            "serverSkill": 37,
+                            "mpCost": 16,
+                            "clientCastQuarterSec": 6,
+                            "clientRecastQuarterSec": 72,
+                            "unlockLevel": 10
+                        },
+                        {
+                            "spellId": 731,
+                            "slug": "soul_rend",
+                            "name": "Soul Rend",
+                            "description": "Corse dark burst.",
+                            "clientMagicType": 2,
+                            "clientElement": 7,
+                            "clientValidTargets": 32,
+                            "serverSkill": 37,
+                            "mpCost": 18,
+                            "clientCastQuarterSec": 8,
+                            "clientRecastQuarterSec": 72,
+                            "unlockLevel": 10
+                        }
+                    ]
+                }
+            ]
+        })json";
+
+        check(st.load_dynamic_spellbooks_json(dsb_json),
+              "load_dynamic_spellbooks_json parses canonical dynamic spellbook JSON");
+        check(st.dynamic_spell_count() == 3, "dynamic_spell_count reports 3 loaded spells");
+        check(!st.dynamic_spellbook_active(), "dynamic_spellbook_active defaults to false");
+        check(st.decide_visibility(ActionKind::Spell, 715) == VisibilityDecision::Hide,
+              "dynamic-only spell 715 is hidden when dynamic spellbook is inactive");
+        check(st.decide_visibility(ActionKind::Spell, 144) == VisibilityDecision::Unmanaged,
+              "base BLM spell Fire (144) stays unmanaged when dynamic spellbook is inactive");
+
+        // Activate Necromancer with Dullahan active: 715 and 723 visible, 731 (Corse) and 144 (Fire) hidden.
+        check(st.observe_ssdsb_frame(
+                  "active=1|soul=necromancer|level=75|replace_base=1|pet_type=dullahan|pet_alive=1|pet_defeated=0|pet_owned=1|weapon_skill=7|stance=dullahan|allowed=715,723"),
+              "observe_ssdsb_frame parses Necromancer Dullahan state");
+        check(st.dynamic_spellbook_active(), "dynamic_spellbook_active is true after SSDSB frame");
+        check(st.decide_visibility(ActionKind::Spell, 715) == VisibilityDecision::Show,
+              "Raise Warrior (715) visible for Necromancer");
+        check(st.decide_visibility(ActionKind::Spell, 723) == VisibilityDecision::Show,
+              "Grave Cleaver (723) visible while Dullahan active");
+        check(st.decide_visibility(ActionKind::Spell, 731) == VisibilityDecision::Hide,
+              "Soul Rend (731) hidden while Dullahan active");
+        check(st.decide_visibility(ActionKind::Spell, 144) == VisibilityDecision::Hide,
+              "traditional BLM Fire (144) hidden while Necromancer replace_base=1");
+
+        ActionRecord rec{};
+        check(st.lookup_action(ActionKind::Spell, 723, rec) && rec.name == "Grave Cleaver",
+              "lookup_action returns Grave Cleaver for dynamic spell 723");
+
+        // Switch to Corse: 723 hides, 731 shows immediately without relog.
+        check(st.observe_ssdsb_frame(
+                  "active=1|soul=necromancer|level=75|replace_base=1|pet_type=corse|pet_alive=1|pet_defeated=0|pet_owned=1|weapon_skill=7|stance=corse|allowed=715,731"),
+              "observe_ssdsb_frame switches to Corse state");
+        check(st.decide_visibility(ActionKind::Spell, 723) == VisibilityDecision::Hide,
+              "Grave Cleaver (723) hidden after switching to Corse");
+        check(st.decide_visibility(ActionKind::Spell, 731) == VisibilityDecision::Show,
+              "Soul Rend (731) visible after switching to Corse");
+
+        // Switch away from Necromancer: base BLM spells immediately restored!
+        check(st.observe_ssdsb_frame("active=0|soul=astromancer|replace_base=0|allowed="),
+              "observe_ssdsb_frame deactivates dynamic spellbook on Soul change");
+        check(!st.dynamic_spellbook_active(), "dynamic_spellbook_active false after Soul change");
+        check(st.decide_visibility(ActionKind::Spell, 144) == VisibilityDecision::Unmanaged,
+              "base BLM Fire (144) restored after leaving Necromancer");
+        check(st.decide_visibility(ActionKind::Spell, 715) == VisibilityDecision::Hide,
+              "Necromancer spell 715 hidden after leaving Necromancer");
+
+        // Verify [SSDSB]| chat suppression
+        std::vector<std::uint8_t> pkt(23 + 32, 0);
+        const char* frame = "[SSDSB]|active=1|soul=necromancer";
+        std::memcpy(pkt.data() + 23, frame, std::strlen(frame));
+        check(packets::should_suppress_for_game(st, 0x017, pkt.data(), pkt.size()),
+              "[SSDSB]| transport frame is suppressed from game chat");
+    }
+
     printf("\n%s (%d failed)\n", g_failed == 0 ? "PASS" : "FAIL", g_failed);
     return g_failed == 0 ? 0 : 1;
 }
