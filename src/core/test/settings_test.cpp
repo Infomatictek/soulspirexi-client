@@ -760,6 +760,18 @@ int main()
               "Developer [developer] enabled honors explicit enabled=1 opt-in");
         DeleteFileW(default_ini.c_str());
         DeleteFileW(optin_ini.c_str());
+
+        // CLIENT-ADDON-001: Verify [soulspire] enabled defaults to 1 (protected core active) and honors 0 (baseline)
+        const std::wstring ss_default_ini = base + L"\\ss_default.ini";
+        write_utf16(ss_default_ini, L"[server]\r\nserver=play.soulspirexi.com\r\n");
+        check(GetPrivateProfileIntW(L"soulspire", L"enabled", 1, ss_default_ini.c_str()) == 1,
+              "Soulspire [soulspire] enabled defaults to 1 when omitted");
+        const std::wstring ss_baseline_ini = base + L"\\ss_baseline.ini";
+        write_utf16(ss_baseline_ini, L"[soulspire]\r\nenabled=0\r\n");
+        check(GetPrivateProfileIntW(L"soulspire", L"enabled", 1, ss_baseline_ini.c_str()) == 0,
+              "Soulspire [soulspire] enabled=0 disables protected core enforcement in baseline profile");
+        DeleteFileW(ss_default_ini.c_str());
+        DeleteFileW(ss_baseline_ini.c_str());
         RemoveDirectoryW(base.c_str());
     }
 

@@ -27,7 +27,7 @@ namespace {
 
 constexpr int kDepth = 16;     // folder levels listed under an overlay
 constexpr size_t kLogged = 20; // files logged as they're served, unless [pivot] log=1 (all of them)
-constexpr const wchar_t* kServer = L"soulspirexi"; // the server's own overlay (server_first())
+constexpr const wchar_t* kServerOverlays[] = {L"soulspirexi", L"flintlock-akimbo-compact"}; // mandatory server overlays (server_first())
 constexpr DWORD kPoll = 500;       // ms between watch()'s looks at the ini
 constexpr ULONGLONG kQuiet = 1500; // ms the root folder is left alone before its overlays are listed again
 constexpr ULONGLONG kSettle = 300; // ms after the ini changes: the /vana Pivot tab writes [pivot.order] a key at a time
@@ -436,36 +436,42 @@ Order read_order(const wchar_t* ini)
     return listed;
 }
 
-// catseyexi, the server's own overlay (the DATs for CatsEyeXI's custom content), goes first whatever [pivot.order] says,
-// and is used whenever the root folder has it, listed or not: no overlay comes before it and it can't be switched off.
-// The /vana Pivot tab shows it so, locked. It went last while it carried a ROM\119\51 (the menus' font, worse than the
-// packs'); with that out of it (8 November 2026), first is where the server's files can't be covered by a pack's.
+// SoulspireXI's mandatory server overlays (base soulspirexi DATs + protected COR Flintlock dual-pistol DATs)
+// always go first in deterministic order whatever [pivot.order] says, whenever present under rootfolder:
+// no user overlay comes before them and they cannot be switched off. The /vana Pivot tab shows them locked.
 void server_first(Order& listed, const std::wstring& root)
 {
     if (client::retail()) {
         // the server's DATs are for its own client: not used, even where [pivot.order] lists them
-        const std::wstring server_key = lower(folder_path(root, kServer));
-        listed.erase(std::remove_if(listed.begin(), listed.end(),
-                                    [&](const auto& entry) { return lower(folder_path(root, entry.second)) == server_key; }),
-                     listed.end());
-        return;
-    }
-    const std::wstring server = folder_path(root, kServer);
-    if (!is_folder(server))
-        return;
-    const std::wstring key = lower(server);
-    std::wstring name = kServer;
-    long own = 0; // its number when listed (the log shows it)
-    for (auto it = listed.begin(); it != listed.end();) {
-        if (lower(folder_path(root, it->second)) == key) {
-            name = it->second;
-            own = it->first;
-            it = listed.erase(it);
-        } else {
-            ++it;
+        for (const wchar_t* ov : kServerOverlays) {
+            const std::wstring server_key = lower(folder_path(root, ov));
+            listed.erase(std::remove_if(listed.begin(), listed.end(),
+                                        [&](const auto& entry) { return lower(folder_path(root, entry.second)) == server_key; }),
+                         listed.end());
         }
+        return;
     }
-    listed.emplace(listed.begin(), own, name);
+    Order pinned;
+    for (const wchar_t* ov : kServerOverlays) {
+        const std::wstring server = folder_path(root, ov);
+        if (!is_folder(server))
+            continue;
+        const std::wstring key = lower(server);
+        std::wstring name = ov;
+        long own = static_cast<long>(pinned.size());
+        for (auto it = listed.begin(); it != listed.end();) {
+            if (lower(folder_path(root, it->second)) == key) {
+                name = it->second;
+                own = it->first;
+                it = listed.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        pinned.emplace_back(own, std::move(name));
+    }
+    if (!pinned.empty())
+        listed.insert(listed.begin(), pinned.begin(), pinned.end());
 }
 
 // The game's menu DATs (ROM\119\51 English, ROM\91\15 Japanese) and the pictures of theirs the game takes by number,

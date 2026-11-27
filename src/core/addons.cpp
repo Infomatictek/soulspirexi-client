@@ -1220,12 +1220,13 @@ void addon_command(const std::vector<std::string>& parts, bool typed)
     if (action == "unloadall") {
         std::vector<Addon*> going;
         for (const auto& addon : g_addons)
-            if (addon->context.flavour != Flavour::VanaCore && addon->source != Flavour::VanaCore)
+            if (addon->context.flavour != Flavour::VanaCore && addon->source != Flavour::VanaCore &&
+                !is_required(addon->context.name, false) && !is_always_on(addon->context.name))
                 going.push_back(addon.get());
         for (auto it = going.rbegin(); it != going.rend(); ++it)
             unload(**it, false, "/addon unloadall");
         if (going.empty())
-            say("No addons to unload (VanaCore's own stay)");
+            say("No addons to unload (VanaCore's own and required SoulspireXI addons stay)");
         return;
     }
     if (action == "exec" || action == "info" || action == "link" || action == "kill") {
@@ -1259,6 +1260,12 @@ void addon_command(const std::vector<std::string>& parts, bool typed)
         } else if (action == "link") {
             addon_link(*addon);
         } else {
+            const bool dev_enabled =
+                !g_settings_ini.empty() && GetPrivateProfileIntW(L"developer", L"enabled", 0, g_settings_ini.c_str()) != 0;
+            if (!dev_enabled && (is_required(addon->context.name, false) || is_always_on(addon->context.name))) {
+                say_error(addon->display + " is a protected core addon and cannot be killed (/addon reload " + addon->display + " reloads it).");
+                return;
+            }
             addon->unload_raised = true; // forced: its unload event isn't raised
             unload(*addon, false, "killed");
         }
@@ -1346,13 +1353,15 @@ bool run_line(std::string_view line);
 // login: with those patched after it, custom items end up in the caches again at every login), and addons wait.
 enum class Lines { All, Plugins, Rest };
 
-// Server-required extensions forced on at boot. SoulspireXI leaves this empty so Phase 1 minimal-login testing
-// and progressive certification control plugin/addon loading explicitly via scripts\boot.txt.
+// Server-required extensions forced on at boot and protected from player unload/removal (CLIENT-ADDON-001).
+// Gated on [soulspire] enabled!=0 so Modern Baseline ([soulspire] enabled=0) remains cleanly isolated.
 constexpr std::initializer_list<const char*> kRequiredPlugins = {};
-constexpr std::initializer_list<const char*> kRequiredAddons = {};
+constexpr const char* kRequiredAddons[] = {"soulspire_core"};
 
 bool is_required(std::string_view name, bool plugin)
 {
+    if (!g_settings_ini.empty() && GetPrivateProfileIntW(L"soulspire", L"enabled", 1, g_settings_ini.c_str()) == 0)
+        return false;
     if (plugin) {
         for (const char* each : kRequiredPlugins)
             if (name == each)
