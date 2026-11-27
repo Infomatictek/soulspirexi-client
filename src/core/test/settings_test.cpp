@@ -16,6 +16,7 @@
 #include "../loader_startup.hpp"
 #include "../registry_policy.hpp"
 #include "../settings.hpp"
+#include "../soulspire/echoes_rebrand.hpp"
 #include "../soulspire/input_ownership.hpp"
 #include "../soulspire/packets.hpp"
 #include "../soulspire/state.hpp"
@@ -775,46 +776,152 @@ int main()
         RemoveDirectoryW(base.c_str());
     }
 
-    // QA-SOUL-COMPANIONS-001: VanaCore-native Soul Companion Magic visibility & naming tests
+    // QA-SOUL-COMPANIONS-001: VanaCore-native Soul Echoes Magic visibility, naming & button rebranding tests
     {
         using namespace vanacore::soulspire;
         EngineState st;
         st.set_enabled(true);
         const char* sample_json = R"json({
             "companionHash": "test1234",
-            "categoryLabel": "Soul Companions",
+            "systemName": "Soul Echoes",
+            "categoryLabel": "Echoes",
             "companions": [
                 {"spellId": 896, "soulId": "war_support", "displayName": "Commander", "description": "WAR Commander (SUPPORT)"},
                 {"spellId": 897, "soulId": "war_dps", "displayName": "Berserker", "description": "WAR Berserker (DPS)"}
             ]
         })json";
-        check(st.load_companions_json(sample_json), "load_companions_json parses canonical Soul Companion JSON");
-        check(st.companion_category_label() == "Soul Companions",
-              "companion_category_label returns canonical Soul Companions category");
-        check(st.companion_spell_count() == 2, "companion_spell_count reports loaded companion spells");
+        check(st.load_companions_json(sample_json), "load_companions_json parses canonical Soul Echoes JSON");
+        check(st.companion_category_label() == "Echoes",
+              "companion_category_label returns canonical Echoes short UI label");
+        check(st.companion_system_name() == "Soul Echoes",
+              "companion_system_name returns canonical Soul Echoes system name");
+        check(st.companion_spell_count() == 2, "companion_spell_count reports loaded Soul Echo spells");
         check(!st.companions_enabled(), "companions_enabled defaults to false (fail-closed)");
         check(st.decide_visibility(ActionKind::Spell, 897) == VisibilityDecision::Hide,
-              "unauthorized client hides Soul Companion spell 897");
+              "unauthorized client hides Soul Echo spell 897");
         check(st.decide_visibility(ActionKind::Spell, 980) == VisibilityDecision::Hide,
               "legacy Trust spell 980 is always hidden");
 
         ActionRecord rec{};
         check(!st.lookup_action(ActionKind::Spell, 897, rec),
-              "lookup_action refuses companion spell name when unauthorized");
+              "lookup_action refuses Soul Echo spell name when unauthorized");
 
         check(st.observe_sscmp_frame("enabled=1|hash=test1234"), "observe_sscmp_frame parses enabled=1");
         check(st.companions_enabled(), "companions_enabled becomes true after server frame");
         check(st.decide_visibility(ActionKind::Spell, 897) == VisibilityDecision::Show,
-              "authorized tester sees Soul Companion spell 897");
+              "authorized tester sees Soul Echo spell 897");
         check(st.decide_visibility(ActionKind::Spell, 980) == VisibilityDecision::Hide,
               "legacy Trust spell 980 remains hidden even when authorized");
         check(st.lookup_action(ActionKind::Spell, 897, rec) && rec.name == "Berserker",
               "lookup_action returns canonical Soul name Berserker for spell 897");
 
+        // Soul Echoes text rebranding rules & player-chat safety
+        check(rebrand_echoes_text("Trust") == "Echoes", "standalone Trust rebrands to Echoes");
+        check(rebrand_echoes_text("You cannot use Trust magic at this time.") ==
+                  "You cannot use Soul Echoes at this time.",
+              "Trust magic system message rebrands to Soul Echoes");
+        check(rebrand_echoes_text("You cannot call forth alter egos here.") ==
+                  "You cannot call forth Soul Echoes here.",
+              "alter egos system message rebrands to Soul Echoes");
+        check(rebrand_echoes_text("Dismiss an alter ego.") == "Dismiss a Soul Echo.",
+              "an alter ego rebrands cleanly to a Soul Echo");
+        check(rebrand_echoes_text("Soul Companions enabled for Soul Companion testing.") ==
+                  "Soul Echoes enabled for Soul Echo testing.",
+              "Soul Companion(s) strings rebrand to Soul Echo(es)");
+        check(rebrand_echoes_text("We entrust this trusted item without distrust.") ==
+                  "We entrust this trusted item without distrust.",
+              "unrelated words containing trust substring remain untouched");
+        check(!is_system_rebrand_chat_mode(1) && !is_system_rebrand_chat_mode(5) &&
+                  !is_system_rebrand_chat_mode(12) && !is_system_rebrand_chat_mode(212),
+              "player chat channels are never rebranded");
+        check(is_system_rebrand_chat_mode(121) && is_system_rebrand_chat_mode(206),
+              "system/game message channels are eligible for Soul Echoes rebranding");
+
+        // Native FFXI CYySprite button decode, zero-clipping fit & synthesis round-trip (88x16 pill)
+        const int echoes_px = measure_font_text_px("Echoes");
+        check(echoes_px == 54 && echoes_px <= 88 - 8,
+              "Echoes short label (54px) fits 88px native button pill with >= 8px margin");
+        std::string fitted;
+        check(choose_fitted_echoes_button_label("Trust", 88, fitted) && fitted == "Echoes",
+              "88px Trust button maps to Echoes");
+        check(choose_fitted_echoes_button_label("Trust Magic", 88, fitted) && fitted == "Echoes",
+              "88px Trust Magic button safely falls back to Echoes without clipping");
+        check(choose_fitted_echoes_button_label("Trust Magic", 120, fitted) && fitted == "Soul Echoes",
+              "120px Trust Magic button uses full Soul Echoes label");
+        check(choose_fitted_echoes_button_label("Release Trust", 88, fitted) && fitted == "Dismiss",
+              "88px Release Trust button fits Dismiss without clipping");
+        check(!choose_fitted_echoes_button_label("White Magic", 88, fitted),
+              "unrelated White Magic button is left untouched");
+
+        // Synthetic 88x16 "Trust" CYySprite round-trip (including 512x512 HD UV scale verification)
+        EchoesMenuSpriteBank src_shape{};
+        const char* trust_word = "Trust";
+        const std::size_t trust_len = 5u;
+        const std::size_t src_total = 2u + trust_len * 2u;
+        const std::int16_t pill_x0[2] = {0, 48};
+        const std::int16_t pill_x1[2] = {48, 88};
+        for (std::size_t p = 0; p < 2u; ++p) {
+            std::memcpy(src_shape.tiles[p] + 0x32, "menu    buttonto", 16);
+            const std::int16_t xs[4] = {pill_x0[p], pill_x1[p], pill_x0[p], pill_x1[p]};
+            const std::int16_t ys[4] = {0, 0, 16, 16};
+            std::memcpy(src_shape.tiles[p] + 0xC0, xs, sizeof(xs));
+            std::memcpy(src_shape.tiles[p] + 0xC8, ys, sizeof(ys));
+        }
+        const float hd_inv = 1.0f / 512.0f;
+        int cur_x = 5;
+        for (std::size_t i = 0; i < trust_len; ++i) {
+            const EchoesFontGlyph* g = find_echoes_glyph_by_char(trust_word[i]);
+            check(g != nullptr, "Trust glyph exists in font table");
+            if (g == nullptr) break;
+            const std::size_t sh_i = 2u + i;
+            const std::size_t fg_i = 2u + trust_len + i;
+            std::memcpy(src_shape.tiles[sh_i] + 0x32, "font    font    ", 16);
+            src_shape.tiles[sh_i][0x2E] = 2u;
+            std::memcpy(src_shape.tiles[fg_i] + 0x32, "font    font    ", 16);
+            src_shape.tiles[fg_i][0x2E] = 0u;
+            const int y0 = 12 - (static_cast<int>(g->row) + 10 - static_cast<int>(g->v));
+            patch_echoes_letter_quad(src_shape.tiles[sh_i], src_shape.tiles[sh_i], *g, cur_x + 2, y0 + 2, hd_inv, hd_inv);
+            patch_echoes_letter_quad(src_shape.tiles[fg_i], src_shape.tiles[fg_i], *g, cur_x, y0, hd_inv, hd_inv);
+            cur_x += static_cast<int>(g->w);
+        }
+        for (std::size_t i = 0; i < src_total; ++i) {
+            std::uint8_t* next_p = (i + 1u < src_total) ? src_shape.nodes[i + 1u] : nullptr;
+            std::uint8_t* tile_p = src_shape.tiles[i];
+            std::memcpy(src_shape.nodes[i] + 0x00, &next_p, sizeof(next_p));
+            std::memcpy(src_shape.nodes[i] + 0x10, &tile_p, sizeof(tile_p));
+            src_shape.nodes[i][0x14] = 0u;
+        }
+        std::uint8_t* head_p = src_shape.nodes[0];
+        const std::uint32_t cnt = static_cast<std::uint32_t>(src_total);
+        std::memcpy(src_shape.sprite + 0x04, &head_p, sizeof(head_p));
+        std::memcpy(src_shape.sprite + 0x14, &cnt, sizeof(cnt));
+
+        DecodedButtonSprite dec_src{};
+        check(decode_button_sprite_label(src_shape.sprite, dec_src) && dec_src.label_view() == "Trust" &&
+                  dec_src.pill_left == 0 && dec_src.pill_right == 88,
+              "decode_button_sprite_label decodes synthetic 88px Trust button");
+
+        EchoesMenuSpriteBank out_bank{};
+        check(synthesize_echoes_button_sprite(out_bank, src_shape.sprite, dec_src, "Echoes"),
+              "synthesize_echoes_button_sprite builds Echoes CYySprite");
+
+        DecodedButtonSprite dec_out{};
+        check(decode_button_sprite_label(out_bank.sprite, dec_out) && dec_out.label_view() == "Echoes" &&
+                  dec_out.pill_left == 0 && dec_out.pill_right == 88,
+              "synthesized button decodes cleanly back to Echoes within 88px pill");
+
+        // Verify HD 512x512 UV scale was preserved on synthesized 'E' foreground quad (tile index 2 + 6 = 8)
+        float u0_e = 0.0f, u1_e = 0.0f;
+        std::memcpy(&u0_e, out_bank.tiles[8] + 0x50 + 0 * 0x1C + 0x14, sizeof(float));
+        std::memcpy(&u1_e, out_bank.tiles[8] + 0x50 + 1 * 0x1C + 0x14, sizeof(float));
+        const float expected_du = 9.0f * hd_inv;
+        check((u1_e - u0_e) > expected_du - 0.0005f && (u1_e - u0_e) < expected_du + 0.0005f,
+              "synthesized button preserves dynamic HD font sheet UV scale");
+
         st.reset_session();
         check(!st.companions_enabled(), "reset_session resets companions_enabled to false (fail-closed)");
         check(st.decide_visibility(ActionKind::Spell, 897) == VisibilityDecision::Hide,
-              "companion spell 897 hidden again after session reset");
+              "Soul Echo spell 897 hidden again after session reset");
     }
 
     // SOUL-SPELL-001: Universal Dynamic Spellbook & Necromancer visibility/naming/suppression tests

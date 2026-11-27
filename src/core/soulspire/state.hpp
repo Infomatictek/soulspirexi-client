@@ -278,12 +278,13 @@ public:
         return dynamic_spellbook_gen_.load(std::memory_order_acquire);
     }
 
-    // QA-SOUL-COMPANIONS-001: Fail-closed tester-exclusive Soul Companion Magic visibility.
+    // QA-SOUL-COMPANIONS-001: Fail-closed tester-exclusive Soul Echoes Magic visibility.
     bool observe_sscmp_frame(std::string_view payload);
     void set_companions_enabled(bool on) noexcept;
     bool companions_enabled() const noexcept { return companions_enabled_.load(std::memory_order_acquire); }
     std::uint32_t companion_spell_count() const;
     std::string companion_category_label() const;
+    std::string companion_system_name() const;
 
     // Identity queries & updates.
     bool resolve_label(std::uint8_t job, std::uint8_t branch, bool full, std::string& out) const;
@@ -378,7 +379,8 @@ private:
     std::unordered_map<std::uint64_t, VisibilityRecord> visibility_;
     std::unordered_map<std::uint16_t, CompanionSpellEntry> companion_spells_;
     std::string companion_hash_;
-    std::string companion_category_label_ = "Soul Companions";
+    std::string companion_category_label_ = "Echoes";
+    std::string companion_system_name_ = "Soul Echoes";
 
     std::unordered_map<std::uint16_t, DynamicSpellEntry> dynamic_spells_;
     std::string dynamic_spellbook_hash_;

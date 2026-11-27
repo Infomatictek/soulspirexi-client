@@ -21,6 +21,8 @@
 #include "macrotext.hpp"
 #include "scan.hpp"
 #include "sliders.hpp"
+#include "soulspire/echoes_rebrand.hpp"
+#include "soulspire/state.hpp"
 #include "text.hpp"
 
 namespace vanacore::buttons {
@@ -267,6 +269,7 @@ Drawing drawing_of(const void* shape, std::uint32_t colour, std::uint32_t skip)
 
 void __fastcall shape_hook(void* shape, void* edx, ShapeArgs args)
 {
+    shape = soulspire::rebrand_menu_shape(shape);
     const Drawing outer = g_now;
     g_now = drawing_of(shape, args.at[kArgColour], args.at[kArgSkip]);
     const macrotext::Key key(shape, static_cast<int>(args.at[0]), static_cast<int>(args.at[1]), std::bit_cast<float>(args.at[2]),
@@ -285,6 +288,7 @@ void __fastcall shape_hook(void* shape, void* edx, ShapeArgs args)
 
 void __fastcall plain_hook(void* shape, void* edx, PlainArgs args)
 {
+    shape = soulspire::rebrand_menu_shape(shape);
     if (g_now.shape == shape) { // the scaled draw's own at a scale of 1: the button as it found it
         g_plain_game(shape, edx, args);
         return;
@@ -659,8 +663,10 @@ void install(const wchar_t* ini)
 
 void on_frame()
 {
-    // (True Font's: a button's letters told apart; the macro bar's keys' labels drawn whole, macrotext.cpp)
-    const bool hook = (restyled_any() || chatfont::labels_on() || chatfont::area_on(VANA_FONT_MACROBAR) || sliders::active()) &&
+    // (True Font's: a button's letters told apart; the macro bar's keys' labels drawn whole, macrotext.cpp;
+    // Soulspire: rebrands native Trust menu buttons to Echoes without adding any new hook)
+    const bool hook = (restyled_any() || chatfont::labels_on() || chatfont::area_on(VANA_FONT_MACROBAR) || sliders::active() ||
+                       soulspire::engine().enabled()) &&
                       !g_shape_tried;
     // the nudge and flash written once asked for, and again at each change after (to put the game's back)
     const bool off = any_set([](const Style& s) { return !s.nudge || !s.flash; });

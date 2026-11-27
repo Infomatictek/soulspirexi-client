@@ -43,6 +43,8 @@
 #include "itemlist.hpp"
 #include "log.hpp"
 #include "labeltext.hpp"
+#include "soulspire/echoes_rebrand.hpp"
+#include "soulspire/state.hpp"
 #include "listtext.hpp"
 #include "macrotext.hpp"
 #include "menulog.hpp"
@@ -2048,6 +2050,14 @@ unsigned char __fastcall add_line(void* log, void* edx, const char* line, const 
 {
     if (line == nullptr || mode == nullptr)
         return g_add_line(log, edx, line, mode, a, b, c);
+    // SoulspireXI (QA-SOUL-COMPANIONS-001): Rebrand native FFXI client DAT Trust/Alter Ego system
+    // messages to Soul Echoes terminology without modifying player chat channels or adding hooks.
+    std::string echoes_line;
+    if (soulspire::engine().enabled() && soulspire::is_system_rebrand_chat_mode(mode[0])) {
+        echoes_line = soulspire::rebrand_echoes_text(line);
+        if (echoes_line != line)
+            line = echoes_line.c_str();
+    }
     chatlog_refresh();
     struct InAddLine { // (and chat.font's widths for the game's line wrap: chatfont::hold)
         InAddLine() { ++g_in_add_line, chatfont::hold(true); }
