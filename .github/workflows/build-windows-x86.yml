@@ -100,8 +100,13 @@ jobs:
           if (-not (Test-Path -LiteralPath $testExe)) { $testExe = "build\Release\VanaCore.SettingsTest.exe" }
           if (-not (Test-Path -LiteralPath $testExe)) { throw "Missing VanaCore.SettingsTest.exe" }
           Write-Host "Running $testExe ..."
-          & $testExe
-          if ($LASTEXITCODE -ne 0) { throw "VanaCore.SettingsTest failed with exit code $LASTEXITCODE" }
+          $testOut = & $testExe 2>&1
+          $testExit = $LASTEXITCODE
+          $testOut | ForEach-Object {
+            Write-Host $_
+            if ($_ -match '^FAIL:') { Write-Host "::error::$_" }
+          }
+          if ($testExit -ne 0) { throw "VanaCore.SettingsTest failed with exit code $testExit" }
           "settings_test=passed" >> $env:GITHUB_OUTPUT
 
           & $msbuild "VanaCore.sln" "-t:VanaCore_GfxTest:Rebuild" -p:Configuration=Release -p:Platform=x86 -m -v:minimal -nologo

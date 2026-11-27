@@ -114,6 +114,39 @@ struct WeaponRuleRecord {
     std::uint16_t sub_item_id = 0;
 };
 
+struct AppearanceMaskRecord {
+    std::uint8_t job = 0;
+    std::uint8_t branch = 0;
+    bool hide_main = false;
+    bool hide_sub = false;
+};
+
+struct RangedOnlyRecord {
+    std::uint8_t job = 0;
+    std::uint8_t branch = 0;
+    bool firearm_only = false;
+    bool auto_facing = false;
+};
+
+struct PeerSoulRecord {
+    std::uint32_t actor_id = 0;
+    std::uint8_t job = 0;
+    std::uint8_t branch = 0;
+    std::uint8_t effective_level = 0;
+    std::uint64_t updated_ms = 0;
+};
+
+// Exact vanilla FFXiMain.dll (0xD3CB2..0xD3CF1) Sub-slot shield model ranges.
+// Shields must ALWAYS resolve from the Sub-slot FTABLE namespace (slot 7).
+inline bool is_vanilla_shield_model_id(std::uint16_t model_id) noexcept
+{
+    return (model_id <= 0x003Fu) ||
+           (model_id >= 0x0075u && model_id <= 0x008Fu) ||
+           (model_id >= 0x01D7u && model_id <= 0x01FFu) ||
+           (model_id >= 0x0280u && model_id <= 0x02BFu) ||
+           (model_id >= 0x049Cu && model_id <= 0x04ABu);
+}
+
 struct HudSnapshot {
     std::string soul_key;
     std::unordered_map<std::string, std::string> kv;
@@ -213,12 +246,22 @@ public:
     void clear_visibility();
     VisibilityDecision decide_visibility(ActionKind kind, std::uint16_t action_id, std::uint8_t level_override = 0) const;
 
-    // Weapon eligibility queries.
+    // Weapon eligibility & Phase D presentation queries.
+    bool has_weapon_rules_for_active() const;
     bool allows_sub_weapon(std::uint16_t main_skill, std::uint16_t main_item_id,
                            std::uint16_t sub_skill, std::uint16_t sub_item_id) const;
     bool allows_dual_2h_menu_item(std::uint16_t sub_skill, std::uint16_t sub_item_id) const;
     bool allows_2h_main_with_sub(std::uint16_t main_skill, std::uint16_t main_item_id,
                                  std::uint16_t sub_skill, std::uint16_t sub_item_id) const;
+    void record_local_equipped_weapons(std::uint16_t main_item_id, std::uint16_t main_skill,
+                                       std::uint16_t sub_item_id, std::uint16_t sub_skill);
+    void upsert_peer_soul(std::uint32_t actor_id, std::uint8_t job, std::uint8_t branch,
+                          std::uint8_t effective_level, std::uint64_t now_ms);
+    bool authorizes_sub_main_namespace(std::uint32_t actor_id, std::uint16_t sub_model_id,
+                                       std::uint64_t now_ms) const;
+    bool should_hide_weapon_slot(std::uint32_t actor_id, std::uint32_t equip_model_slot,
+                                 std::uint64_t now_ms) const;
+    bool is_ranged_only_active() const;
 
     // Packet-driven HUD / Mob / Soulforge state updates.
     bool observe_oxhud_frame(std::string_view payload, std::uint64_t now_ms);
@@ -268,7 +311,14 @@ private:
     std::unordered_map<std::uint64_t, VisibilityRecord> visibility_;
 
     std::vector<WeaponRuleRecord> weapon_rules_;
+    std::vector<AppearanceMaskRecord> appearance_masks_;
+    std::vector<RangedOnlyRecord> ranged_only_;
+    std::unordered_map<std::uint32_t, PeerSoulRecord> peers_;
     std::string weapon_config_hash_;
+    std::uint16_t local_equip_main_item_id_ = 0;
+    std::uint16_t local_equip_main_skill_ = 0;
+    std::uint16_t local_equip_sub_item_id_ = 0;
+    std::uint16_t local_equip_sub_skill_ = 0;
 
     HudSnapshot hud_{};
     std::unordered_map<std::uint32_t, MobStatusSnapshot> mobs_;

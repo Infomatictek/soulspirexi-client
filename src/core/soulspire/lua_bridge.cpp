@@ -425,6 +425,10 @@ int l_acquire_ui_input(lua_State* L)
         if (lua_isnumber(L, -1)) opts.lease_ms = static_cast<std::uint32_t>(lua_tointeger(L, -1));
         lua_pop(L, 1);
     }
+    if (window::in_background()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
     const UiInputTransition tr = input_ownership().acquire(owner != nullptr ? owner : "soulspire_core", opts, GetTickCount64());
     if (tr.active) {
         if (tr.block_mouse) window::block_mouse(true, 400);

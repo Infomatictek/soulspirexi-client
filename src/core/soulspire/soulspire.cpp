@@ -65,6 +65,8 @@ bool reload_registries()
     std::wstring used;
 
     const std::vector<std::wstring> ident_paths = {
+        g_install_dir + L"\\addons\\soulspire_core\\data\\soul-identities.json",
+        g_install_dir + L"\\addons\\vanacore\\soulspire_core\\data\\soul-identities.json",
         g_install_dir + L"\\plugins\\ashita\\data\\soul-identities.json",
         g_install_dir + L"\\plugins\\data\\soul-identities.json",
         g_install_dir + L"\\data\\soul-identities.json",
@@ -81,6 +83,8 @@ bool reload_registries()
     }
 
     const std::vector<std::wstring> weapon_paths = {
+        g_install_dir + L"\\addons\\soulspire_core\\data\\soul-weapon-config.json",
+        g_install_dir + L"\\addons\\vanacore\\soulspire_core\\data\\soul-weapon-config.json",
         g_install_dir + L"\\plugins\\ashita\\data\\soul-weapon-config.json",
         g_install_dir + L"\\plugins\\data\\soul-weapon-config.json",
         g_install_dir + L"\\data\\soul-weapon-config.json",

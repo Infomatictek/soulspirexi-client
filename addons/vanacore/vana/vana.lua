@@ -115,11 +115,14 @@ load_module('hud') -- the HUD Manager window (/hud): the game windows' boxes and
 load_module('copy') -- Client > Characters' copies of the Main's settings, addons and windows to the Alts
 load_module('partypreview') -- Party / Alliance's Preview: made-up members in the party and alliance lists
 load_module('zonename') -- the zone's name in the middle of the screen when you zone in (Mods > Zones > Zone Name)
-do -- /vana2: a look at a redesigned window (vana2.lua, drawn with made-up values); one that fails to load never takes /vana with it
-    local ok, err = pcall(load_module, 'vana2')
-    if not ok then
-        print('VanaCore: /vana2 isn\'t available: ' .. tostring(err))
+-- PLAYER-CMD-001: upstream /vana2 prototype UI mockup is intentionally not loaded in SoulspireXI player builds.
+
+local function developer_mode_enabled()
+    if type(vana) == 'table' and vana.config and type(vana.config.get) == 'function' then
+        local v = tostring(vana.config.get('developer', 'enabled') or ''):lower()
+        return v == '1' or v == 'true' or v == 'on' or v == 'yes'
     end
+    return false
 end
 
 local S, P, fonts = M.S, M.P, M.fonts
@@ -6599,10 +6602,13 @@ vana.events.on('command', function (e)
             return true
         end
     end
-    -- /api (or /apiexplorer) with the API Explorer not loaded: it's loaded and shown (/api hide: nothing to hide). Once
-    -- it's loaded the apiexplorer addon answers /api itself, so it's passed on (the same patterns as its own)
+    -- /api (or /apiexplorer): developer tool gated behind [developer] enabled=1 (PLAYER-CMD-001)
     local api = e.command:match('^/api%s*(%a*)%s*$') or e.command:match('^/apiexplorer%s*(%a*)%s*$')
     if (api == '' or api == 'show' or api == 'hide') and not M.apiexplorer_loaded() then
+        if not developer_mode_enabled() then
+            print('SoulspireXI: /api developer explorer is disabled in player builds (set [developer] enabled=1 in vanacore.ini).')
+            return true
+        end
         if api ~= 'hide' then
             M.open_apiexplorer()
         end
@@ -6636,7 +6642,11 @@ vana.events.on('command', function (e)
         close()
     elseif what == 'minimize' or what == 'minimise' then
         if st.open and not st.minimised then minimise() end
-    elseif what == 'debug' then -- /vana debug alone (VanaCore records frames for /vana debug <seconds> or stop)
+    elseif what == 'debug' then -- /vana debug alone (developer debug/crash-test panel gated behind [developer] enabled=1)
+        if not developer_mode_enabled() then
+            print('SoulspireXI: /vana debug is disabled in player builds (set [developer] enabled=1 in vanacore.ini).')
+            return true
+        end
         M.debug_toggle()
     elseif what == 'reload' then
         reload()

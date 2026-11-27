@@ -4,6 +4,7 @@
 
 #include <cstring>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "../d3d8.hpp"
 #include "../image.hpp"
@@ -22,6 +23,7 @@ struct Entry {
 void* g_device = nullptr;
 std::unordered_map<std::uint32_t, Entry> g_by_id;
 std::unordered_map<std::string, std::uint32_t> g_by_path;
+std::unordered_set<std::string> g_failed_paths;
 std::uint64_t g_total_bytes = 0;
 std::uint32_t g_hits = 0;
 std::uint32_t g_misses = 0;
@@ -71,6 +73,7 @@ void release_all()
     }
     g_by_id.clear();
     g_by_path.clear();
+    g_failed_paths.clear();
     g_total_bytes = 0;
     g_device = nullptr;
 }
@@ -110,11 +113,17 @@ bool load(const std::string& utf8_path, TextureInfo& out, std::string& err)
         g_by_path.erase(it);
     }
 
+    if (g_failed_paths.find(key) != g_failed_paths.end()) {
+        err = "cached missing";
+        return false;
+    }
+
     ++g_misses;
     const std::wstring wpath = utf8_to_wide(utf8_path);
     if (wpath.empty()) {
         err = "invalid utf8 path";
         ++g_failures;
+        g_failed_paths.insert(key);
         return false;
     }
 
@@ -122,6 +131,7 @@ bool load(const std::string& utf8_path, TextureInfo& out, std::string& err)
     if (!image::decode_file(wpath, pixels) || pixels.width <= 0 || pixels.height <= 0 || pixels.argb.empty()) {
         err = "decode failed";
         ++g_failures;
+        g_failed_paths.insert(key);
         return false;
     }
 

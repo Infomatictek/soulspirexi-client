@@ -484,17 +484,68 @@ int main()
         const std::string fmt_desc = format_action_description(ss_ni.description, 120);
         check(!fmt_desc.empty() && fmt_desc.size() <= 120, "format_action_description bounds HelpWind length");
 
-        // 5. Weapon rules JSON (Berserker DUAL_2H Great Axe skill=6)
+        // 5. Weapon rules JSON (Phase D: Berserker DUAL_2H Great Axe + Flintlock appearanceMasks/rangedOnly)
         const char* weap_json = R"({
             "weaponConfigHash": "85de194dbb914f94",
             "rules": [
-                {"jobId": 1, "branchId": 2, "minEffectiveLevel": 10, "mode": "dual_2h", "mainSkillMask": 64, "subSkillMask": 64}
+                {"jobId": 1, "branch": 2, "minEffectiveLevel": 10, "mode": "dual_2h", "mainSkillMask": 64, "subSkillMask": 64}
+            ],
+            "appearanceMasks": [
+                {"jobId": 17, "branch": 1, "hideMain": true, "hideSub": true}
+            ],
+            "rangedOnly": [
+                {"jobId": 17, "branch": 1, "firearmOnly": true, "autoFacing": true}
             ]
         })";
-        check(st.load_weapon_config_json(weap_json), "load_weapon_config_json parses Berserker rule");
+        check(st.load_weapon_config_json(weap_json), "load_weapon_config_json parses Berserker + Flintlock rules");
         st.set_active_soul(cid, 1, 2, 75, true, "unit_test", 250);
         check(st.allows_sub_weapon(6, 18000, 6, 18001), "Berserker Lv.75 allows Dual Great Axe");
         check(st.allows_dual_2h_menu_item(6, 18001), "Berserker Sub-slot picker allows Great Axe");
+        check(st.allows_2h_main_with_sub(6, 18000, 6, 18001), "Berserker allows 2H Great Axe Main with Great Axe Sub");
+        st.record_local_equipped_weapons(18000, 6, 18001, 6);
+        const bool local_remap_ok = st.authorizes_sub_main_namespace(cid, 0x0120u, 255);
+        if (!local_remap_ok) {
+            const auto a = st.active_soul();
+            const auto d = st.diagnostics();
+            printf("FAIL: diag enabled=%d cid=%u a.cid=%u job=%u br=%u lv=%u known=%d rules=%u\n",
+                   (int)st.enabled(), cid, a.character_id, a.job, a.branch, a.effective_level, (int)a.known, d.weapon_rule_count);
+        }
+        check(local_remap_ok,
+              "Berserker dual Great Axe authorizes PC Sub->Main FTABLE model namespace");
+        check(!st.authorizes_sub_main_namespace(cid, 0x0010u, 255) && !st.authorizes_sub_main_namespace(cid, 0x0080u, 255),
+              "Vanilla shield model ranges NEVER remap to Main FTABLE namespace");
+        check(!st.should_hide_weapon_slot(cid, 6u, 255) && !st.should_hide_weapon_slot(cid, 7u, 255),
+              "Berserker melee weapon models are NEVER hidden by Flintlock appearanceMasks");
+        // Non-Berserker WAR Souls (Commander branch 1, Spartan branch 3) are strictly denied
+        st.set_active_soul(cid, 1, 1, 75, true, "unit_test", 256);
+        check(!st.allows_sub_weapon(6, 18000, 6, 18001) && !st.authorizes_sub_main_namespace(cid, 0x0120u, 256),
+              "WAR Commander denied Berserker Dual Great Axe & model remap");
+        st.set_active_soul(cid, 1, 3, 75, true, "unit_test", 257);
+        check(!st.allows_sub_weapon(6, 18000, 6, 18001) && !st.authorizes_sub_main_namespace(cid, 0x0120u, 257),
+              "WAR Spartan denied Berserker Dual Great Axe & model remap");
+        // Flintlock (COR branch 1) hides Main/Sub melee models and sets rangedOnly; other COR Souls do NOT
+        st.set_active_soul(cid, 17, 1, 75, true, "unit_test", 258);
+        check(st.is_ranged_only_active() && st.should_hide_weapon_slot(cid, 6u, 258) && st.should_hide_weapon_slot(cid, 7u, 258),
+              "Flintlock activates rangedOnly and hides Main/Sub melee weapon models");
+        st.set_active_soul(cid, 17, 2, 75, true, "unit_test", 259);
+        check(!st.is_ranged_only_active() && !st.should_hide_weapon_slot(cid, 6u, 259) && !st.should_hide_weapon_slot(cid, 7u, 259),
+              "COR Gambler does NOT inherit Flintlock rangedOnly or appearanceMasks");
+        st.set_active_soul(cid, 17, 3, 75, true, "unit_test", 259);
+        check(!st.is_ranged_only_active() && !st.should_hide_weapon_slot(cid, 6u, 259) && !st.should_hide_weapon_slot(cid, 7u, 259),
+              "COR Buccaneer does NOT inherit Flintlock rangedOnly or appearanceMasks");
+        // Remote peer Berserker via 0x1FC OXSI authorizes remap strictly from peer's own Soul
+        std::uint8_t pkt_oxsi[16]{};
+        std::memcpy(pkt_oxsi + 4, "OXSI", 4);
+        pkt_oxsi[8] = 1;  // ver
+        pkt_oxsi[9] = 1;  // WAR
+        pkt_oxsi[10] = 2; // Berserker
+        pkt_oxsi[11] = 75;
+        const std::uint32_t peer_id = 999001u;
+        std::memcpy(pkt_oxsi + 12, &peer_id, 4);
+        packets::on_incoming(st, 0x1FC, pkt_oxsi, sizeof(pkt_oxsi), 260);
+        check(st.authorizes_sub_main_namespace(peer_id, 0x0120u, 265) &&
+                  !st.authorizes_sub_main_namespace(peer_id, 84u, 265),
+              "Remote peer Berserker OXSI authorizes Sub->Main remap and denies fallback model 84");
         st.set_active_soul(cid, 13, 1, 75, true, "unit_test", 260);
         check(!st.allows_sub_weapon(6, 18000, 6, 18001), "Shinobi denied Berserker Dual Great Axe");
 
@@ -522,7 +573,36 @@ int main()
         check(!packets::should_suppress_for_game(st, 0x017, p_normal.data(), p_normal.size()),
               "ordinary player chat is NEVER suppressed");
 
-        // 6b. 0x1FC OXHD, 0x1FD OXTL, 0x1FE OXKE, [OXTAL]|, [OXBST]| & HookStatus disposition diagnostics
+        // 6b. 0x1FC OXHD (binary unlocked/job/soul_key), 64-byte 0x1FF CRYS, 0x1FD OXTL, 0x1FE OXKE
+        {
+            std::vector<std::uint8_t> pkt_oxhd(16 + 9, 0);
+            std::memcpy(pkt_oxhd.data() + 4, "OXHD", 4);
+            pkt_oxhd[8] = 1;  // ver
+            pkt_oxhd[9] = 1;  // unlocked=true (must NOT be misread as job=1)
+            pkt_oxhd[10] = 1; // job_id=1 WAR (must NOT be misread as branch=1 Commander!)
+            pkt_oxhd[11] = 9; // key_len="berserker"
+            std::memcpy(pkt_oxhd.data() + 16, "berserker", 9);
+            packets::on_incoming(st, 0x1FC, pkt_oxhd.data(), pkt_oxhd.size(), 322);
+            const ActiveSoul after_oxhd = st.active_soul();
+            check(after_oxhd.known && after_oxhd.job == 1 && after_oxhd.branch == 2,
+                  "binary 0x1FC OXHD decodes berserker -> WAR branch 2 (not Commander branch 1)");
+
+            std::uint8_t pkt_crys64[64]{};
+            pkt_crys64[0] = 0xFF; pkt_crys64[1] = 0x21;
+            std::memcpy(pkt_crys64 + 4, "CRYS", 4);
+            pkt_crys64[8] = 1;  // ver
+            pkt_crys64[9] = 0;  // result=ok
+            pkt_crys64[10] = 0x01; pkt_crys64[11] = 0x40; // request_id=0x4001
+            pkt_crys64[12] = 1; // WAR
+            pkt_crys64[13] = 24;
+            pkt_crys64[14] = 75;
+            pkt_crys64[16 + 1 * 2] = 0x0E; // owned_mask
+            pkt_crys64[16 + 1 * 2 + 1] = 2; // active=Berserker
+            packets::on_incoming(st, 0x1FF, pkt_crys64, sizeof(pkt_crys64), 323);
+            const ActiveSoul after_crys64 = st.active_soul();
+            check(after_crys64.known && after_crys64.job == 1 && after_crys64.branch == 2 && after_crys64.effective_level == 75,
+                  "64-byte 0x1FF CRYS decodes WAR Lv.75 Berserker cleanly");
+        }
         std::uint8_t pkt_1fd[12]{};
         std::memcpy(pkt_1fd + 4, "OXTL", 4);
         packets::on_incoming(st, 0x1FD, pkt_1fd, sizeof(pkt_1fd), 325);
@@ -663,6 +743,24 @@ int main()
             vanacore::loader::classify_game_start_exit(S_OK, true, vanacore::kExitGameStartFailed);
         check(clean_exit.outcome == vanacore::loader::GameStartOutcome::CleanExit && clean_exit.exit_code == 0,
               "GameStart return after Direct3DCreate8 classifies as CleanExit (exit 0)");
+
+        // PLAYER-CMD-001: Verify [mcp] available and [developer] enabled default to 0 (fail-closed)
+        CreateDirectoryW(base.c_str(), nullptr);
+        const std::wstring default_ini = base + L"\\player_default.ini";
+        write_utf16(default_ini, L"[server]\r\nserver=play.soulspirexi.com\r\n");
+        check(GetPrivateProfileIntW(L"mcp", L"available", 0, default_ini.c_str()) == 0,
+              "MCP [mcp] available defaults to 0 when omitted");
+        check(GetPrivateProfileIntW(L"developer", L"enabled", 0, default_ini.c_str()) == 0,
+              "Developer [developer] enabled defaults to 0 when omitted");
+        const std::wstring optin_ini = base + L"\\dev_optin.ini";
+        write_utf16(optin_ini, L"[mcp]\r\navailable=1\r\n[developer]\r\nenabled=1\r\n");
+        check(GetPrivateProfileIntW(L"mcp", L"available", 0, optin_ini.c_str()) == 1,
+              "MCP [mcp] available honors explicit available=1 opt-in");
+        check(GetPrivateProfileIntW(L"developer", L"enabled", 0, optin_ini.c_str()) == 1,
+              "Developer [developer] enabled honors explicit enabled=1 opt-in");
+        DeleteFileW(default_ini.c_str());
+        DeleteFileW(optin_ini.c_str());
+        RemoveDirectoryW(base.c_str());
     }
 
     printf("\n%s (%d failed)\n", g_failed == 0 ? "PASS" : "FAIL", g_failed);

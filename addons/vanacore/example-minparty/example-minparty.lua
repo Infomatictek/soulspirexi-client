@@ -15,7 +15,7 @@ In game:
 --]]
 
 addon.name    = 'example-minparty'
-addon.author  = 'CatsEyeXI'
+addon.author  = 'SoulspireXI / VanaCore SDK Example'
 addon.version = '0.1'
 addon.desc    = 'A smaller party list in place of the game\'s (an example of vana.gameui).'
 
