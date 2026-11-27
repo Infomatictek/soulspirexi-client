@@ -87,6 +87,16 @@ void on_incoming(EngineState& st, std::uint16_t id, const std::uint8_t* data, st
             if (ver == 1 && job >= 1 && job <= 22 && branch <= 3) {
                 st.set_active_soul(0, job, branch, 0, branch > 0, "packet_1fc", now_ms);
             }
+        } else if (length >= 16 && std::memcmp(data + 4, "OXSI", 4) == 0) {
+            // Peer OXSI frame: [4..7]="OXSI", [8]=version(1), [9]=job, [10]=branch, [11]=effective_level, [12..15]=actor_id
+            const std::uint8_t ver = data[8];
+            const std::uint8_t job = data[9];
+            const std::uint8_t branch = data[10];
+            const std::uint8_t eff_level = data[11];
+            const std::uint32_t actor_id = read_u32_le(data + 12);
+            if (ver == 1 && actor_id != 0 && job >= 1 && job <= 22 && branch >= 1 && branch <= 3) {
+                st.upsert_peer_soul(actor_id, job, branch, eff_level, now_ms);
+            }
         }
         return;
     }

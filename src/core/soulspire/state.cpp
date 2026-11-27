@@ -131,6 +131,22 @@ struct JsonScan {
         return true;
     }
 
+    bool parse_bool(bool& out) noexcept
+    {
+        ws();
+        if (end - p >= 4 && std::memcmp(p, "true", 4) == 0) {
+            p += 4;
+            out = true;
+            return true;
+        }
+        if (end - p >= 5 && std::memcmp(p, "false", 5) == 0) {
+            p += 5;
+            out = false;
+            return true;
+        }
+        return false;
+    }
+
     bool skip_value(int depth = 0)
     {
         if (depth > 32)
@@ -304,7 +320,14 @@ void EngineState::reset_all()
     action_generation_ = 0;
     visibility_.clear();
     weapon_rules_.clear();
+    appearance_masks_.clear();
+    ranged_only_.clear();
+    peers_.clear();
     weapon_config_hash_.clear();
+    local_equip_main_item_id_.store(0, std::memory_order_relaxed);
+    local_equip_main_skill_.store(0, std::memory_order_relaxed);
+    local_equip_sub_item_id_.store(0, std::memory_order_relaxed);
+    local_equip_sub_skill_.store(0, std::memory_order_relaxed);
     hud_ = {};
     mobs_.clear();
     packets_1ff_ = packets_1fc_ = packets_1fd_ = packets_1fe_ = 0;
@@ -318,6 +341,11 @@ void EngineState::reset_session()
 {
     std::lock_guard lock(mutex_);
     active_ = {};
+    peers_.clear();
+    local_equip_main_item_id_.store(0, std::memory_order_relaxed);
+    local_equip_main_skill_.store(0, std::memory_order_relaxed);
+    local_equip_sub_item_id_.store(0, std::memory_order_relaxed);
+    local_equip_sub_skill_.store(0, std::memory_order_relaxed);
     hud_.soul_key.clear();
     hud_.kv.clear();
     hud_.updated_ms = 0;
@@ -438,6 +466,8 @@ bool EngineState::load_weapon_config_json(std::string_view json_text)
         return false;
 
     std::vector<WeaponRuleRecord> next_rules;
+    std::vector<AppearanceMaskRecord> next_masks;
+    std::vector<RangedOnlyRecord> next_ranged;
     std::string next_hash;
 
     if (!s.peek('}')) {
@@ -526,6 +556,102 @@ bool EngineState::load_weapon_config_json(std::string_view json_text)
                 } else {
                     s.take(']');
                 }
+            } else if (field == "appearanceMasks") {
+                if (!s.take('['))
+                    return false;
+                if (!s.peek(']')) {
+                    while (true) {
+                        if (!s.take('{'))
+                            return false;
+                        std::int64_t job = 0, branch = 0;
+                        bool hide_main = false, hide_sub = false;
+                        if (!s.peek('}')) {
+                            while (true) {
+                                std::string k;
+                                if (!s.parse_string(k) || !s.take(':'))
+                                    return false;
+                                if (k == "jobId" || k == "job") {
+                                    if (!s.parse_int(job)) return false;
+                                } else if (k == "branchId" || k == "branch") {
+                                    if (!s.parse_int(branch)) return false;
+                                } else if (k == "hideMain") {
+                                    if (!s.parse_bool(hide_main)) return false;
+                                } else if (k == "hideSub") {
+                                    if (!s.parse_bool(hide_sub)) return false;
+                                } else {
+                                    if (!s.skip_value()) return false;
+                                }
+                                if (s.take(','))
+                                    continue;
+                                if (!s.take('}'))
+                                    return false;
+                                break;
+                            }
+                        } else {
+                            s.take('}');
+                        }
+                        if (job >= 1 && job <= 22 && branch >= 1 && branch <= 3 && (hide_main || hide_sub)) {
+                            next_masks.push_back({static_cast<std::uint8_t>(job),
+                                                  static_cast<std::uint8_t>(branch),
+                                                  hide_main, hide_sub});
+                        }
+                        if (s.take(','))
+                            continue;
+                        if (!s.take(']'))
+                            return false;
+                        break;
+                    }
+                } else {
+                    s.take(']');
+                }
+            } else if (field == "rangedOnly") {
+                if (!s.take('['))
+                    return false;
+                if (!s.peek(']')) {
+                    while (true) {
+                        if (!s.take('{'))
+                            return false;
+                        std::int64_t job = 0, branch = 0;
+                        bool firearm_only = false, auto_facing = false;
+                        if (!s.peek('}')) {
+                            while (true) {
+                                std::string k;
+                                if (!s.parse_string(k) || !s.take(':'))
+                                    return false;
+                                if (k == "jobId" || k == "job") {
+                                    if (!s.parse_int(job)) return false;
+                                } else if (k == "branchId" || k == "branch") {
+                                    if (!s.parse_int(branch)) return false;
+                                } else if (k == "firearmOnly") {
+                                    if (!s.parse_bool(firearm_only)) return false;
+                                } else if (k == "autoFacing") {
+                                    if (!s.parse_bool(auto_facing)) return false;
+                                } else {
+                                    if (!s.skip_value()) return false;
+                                }
+                                if (s.take(','))
+                                    continue;
+                                if (!s.take('}'))
+                                    return false;
+                                break;
+                            }
+                        } else {
+                            s.take('}');
+                        }
+                        if (job >= 1 && job <= 22 && branch >= 1 && branch <= 3 && (firearm_only || auto_facing)) {
+                            next_ranged.push_back({static_cast<std::uint8_t>(job),
+                                                   static_cast<std::uint8_t>(branch),
+                                                   firearm_only, auto_facing});
+                        }
+                        if (s.take(','))
+                            continue;
+                        if (!s.take(']'))
+                            return false;
+                        break;
+                    }
+                } else {
+                    s.take(']');
+                }
             } else {
                 if (!s.skip_value())
                     return false;
@@ -540,6 +666,8 @@ bool EngineState::load_weapon_config_json(std::string_view json_text)
 
     std::lock_guard lock(mutex_);
     weapon_rules_ = std::move(next_rules);
+    appearance_masks_ = std::move(next_masks);
+    ranged_only_ = std::move(next_ranged);
     if (!next_hash.empty())
         weapon_config_hash_ = std::move(next_hash);
     return true;
@@ -773,6 +901,18 @@ VisibilityDecision EngineState::decide_visibility(ActionKind kind, std::uint16_t
     return level >= rule.min_effective_level ? VisibilityDecision::Show : VisibilityDecision::Hide;
 }
 
+bool EngineState::has_weapon_rules_for_active() const
+{
+    std::lock_guard lock(mutex_);
+    if (!active_.known || active_.job < 1 || active_.branch < 1 || active_.effective_level == 0)
+        return false;
+    for (const auto& r : weapon_rules_) {
+        if (r.job == active_.job && r.branch == active_.branch && active_.effective_level >= r.min_effective_level)
+            return true;
+    }
+    return false;
+}
+
 bool EngineState::allows_sub_weapon(std::uint16_t main_skill, std::uint16_t main_item_id,
                                     std::uint16_t sub_skill, std::uint16_t sub_item_id) const
 {
@@ -832,6 +972,144 @@ bool EngineState::allows_2h_main_with_sub(std::uint16_t main_skill, std::uint16_
         if (r.main_item_id != 0 && r.main_item_id != main_item_id) continue;
         if (r.sub_item_id != 0 && r.sub_item_id != sub_item_id) continue;
         return true;
+    }
+    return false;
+}
+
+void EngineState::record_local_equipped_weapons(std::uint16_t main_item_id, std::uint16_t main_skill,
+                                                std::uint16_t sub_item_id, std::uint16_t sub_skill) noexcept
+{
+    local_equip_main_item_id_.store(main_item_id, std::memory_order_relaxed);
+    local_equip_main_skill_.store(main_skill, std::memory_order_relaxed);
+    local_equip_sub_item_id_.store(sub_item_id, std::memory_order_relaxed);
+    local_equip_sub_skill_.store(sub_skill, std::memory_order_relaxed);
+}
+
+void EngineState::upsert_peer_soul(std::uint32_t actor_id, std::uint8_t job, std::uint8_t branch,
+                                   std::uint8_t effective_level, std::uint64_t now_ms)
+{
+    if (actor_id == 0 || job < 1 || job > 22 || branch < 1 || branch > 3)
+        return;
+    std::lock_guard lock(mutex_);
+    peers_[actor_id] = {actor_id, job, branch, effective_level, now_ms};
+    if (peers_.size() > 128) {
+        auto oldest = peers_.begin();
+        for (auto it = peers_.begin(); it != peers_.end(); ++it) {
+            if (it->second.updated_ms < oldest->second.updated_ms)
+                oldest = it;
+        }
+        if (oldest != peers_.end() && oldest->first != actor_id)
+            peers_.erase(oldest);
+    }
+}
+
+bool EngineState::authorizes_sub_main_namespace(std::uint32_t actor_id, std::uint16_t sub_model_id,
+                                                std::uint64_t now_ms) const
+{
+    constexpr std::uint64_t kPeerTtlMs = 120000u;
+    if (!enabled() || actor_id == 0 || sub_model_id == 0 || is_vanilla_shield_model_id(sub_model_id))
+        return false;
+
+    std::lock_guard lock(mutex_);
+    if (weapon_rules_.empty())
+        return false;
+
+    const bool is_local = (active_.character_id != 0 && actor_id == active_.character_id);
+    std::uint8_t job = 0, branch = 0, eff_level = 0;
+    bool has_equipped_skills = false;
+    std::uint16_t main_item_id = 0, main_skill = 0, sub_item_id = 0, sub_skill = 0;
+
+    if (is_local) {
+        if (!active_.known || active_.job < 1 || active_.branch < 1 || active_.effective_level == 0)
+            return false;
+        job = active_.job;
+        branch = active_.branch;
+        eff_level = active_.effective_level;
+        main_item_id = local_equip_main_item_id_.load(std::memory_order_relaxed);
+        main_skill   = local_equip_main_skill_.load(std::memory_order_relaxed);
+        sub_item_id  = local_equip_sub_item_id_.load(std::memory_order_relaxed);
+        sub_skill    = local_equip_sub_skill_.load(std::memory_order_relaxed);
+        if (main_skill == 0 || sub_skill == 0)
+            return false;
+        has_equipped_skills = true;
+    } else {
+        if (sub_model_id == 84u)
+            return false;
+        const auto it = peers_.find(actor_id);
+        if (it == peers_.end())
+            return false;
+        if (now_ms > it->second.updated_ms && (now_ms - it->second.updated_ms) > kPeerTtlMs)
+            return false;
+        job = it->second.job;
+        branch = it->second.branch;
+        eff_level = it->second.effective_level;
+    }
+
+    const std::uint32_t mbit = (main_skill > 0 && main_skill < 32u) ? (1u << main_skill) : 0u;
+    const std::uint32_t sbit = (sub_skill > 0 && sub_skill < 32u) ? (1u << sub_skill) : 0u;
+    for (const auto& r : weapon_rules_) {
+        if (r.job != job || r.branch != branch) continue;
+        if (eff_level < r.min_effective_level) continue;
+        if (r.mode != WeaponRuleMode::Dual2H) continue;
+        if (has_equipped_skills) {
+            if ((r.main_skill_mask & mbit) == 0 || (r.sub_skill_mask & sbit) == 0) continue;
+            if (r.main_item_id != 0 && r.main_item_id != main_item_id) continue;
+            if (r.sub_item_id != 0 && r.sub_item_id != sub_item_id) continue;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool EngineState::should_hide_weapon_slot(std::uint32_t actor_id, std::uint32_t equip_model_slot,
+                                          std::uint64_t now_ms) const
+{
+    constexpr std::uint64_t kPeerTtlMs = 120000u;
+    if (!enabled() || actor_id == 0 || (equip_model_slot != 6u && equip_model_slot != 7u))
+        return false;
+
+    std::lock_guard lock(mutex_);
+    if (appearance_masks_.empty())
+        return false;
+
+    const bool is_local = (active_.character_id != 0 && actor_id == active_.character_id);
+    std::uint8_t job = 0, branch = 0;
+    if (is_local) {
+        if (!active_.known || active_.job < 1 || active_.branch < 1)
+            return false;
+        job = active_.job;
+        branch = active_.branch;
+    } else {
+        const auto it = peers_.find(actor_id);
+        if (it == peers_.end())
+            return false;
+        if (now_ms > it->second.updated_ms && (now_ms - it->second.updated_ms) > kPeerTtlMs)
+            return false;
+        job = it->second.job;
+        branch = it->second.branch;
+    }
+
+    for (const auto& m : appearance_masks_) {
+        if (m.job != job || m.branch != branch)
+            continue;
+        if (equip_model_slot == 6u && m.hide_main)
+            return true;
+        if (equip_model_slot == 7u && m.hide_sub)
+            return true;
+    }
+    return false;
+}
+
+bool EngineState::is_ranged_only_active() const
+{
+    if (!enabled())
+        return false;
+    std::lock_guard lock(mutex_);
+    if (!active_.known || active_.job < 1 || active_.branch < 1)
+        return false;
+    for (const auto& r : ranged_only_) {
+        if (r.job == active_.job && r.branch == active_.branch && r.firearm_only)
+            return true;
     }
     return false;
 }
