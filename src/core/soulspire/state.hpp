@@ -73,6 +73,19 @@ struct SoulIdentityEntry {
     std::string abbr;
 };
 
+// QA-SOUL-COMPANIONS-001: Native Trust Magic spell range repurposed for Soul Companions.
+// Spells 896..961 map 1:1 to the 66 canonical Souls; 962..1017 are legacy Trusts (always hidden).
+constexpr std::uint16_t kTrustSpellBaseId     = 896;
+constexpr std::uint16_t kTrustSpellLastSoulId = 961;
+constexpr std::uint16_t kTrustSpellMaxId      = 1017;
+
+struct CompanionSpellEntry {
+    std::uint16_t spell_id = 0;
+    std::string soul_id;
+    std::string name;
+    std::string description;
+};
+
 struct ActiveSoul {
     std::uint32_t character_id = 0;
     std::uint8_t job = 0;
@@ -219,6 +232,13 @@ public:
     // Registry & config loading from authoritative JSON payloads.
     bool load_identities_json(std::string_view json_text, std::string_view source_label);
     bool load_weapon_config_json(std::string_view json_text);
+    bool load_companions_json(std::string_view json_text);
+
+    // QA-SOUL-COMPANIONS-001: Fail-closed tester-exclusive Soul Companion Magic visibility.
+    bool observe_sscmp_frame(std::string_view payload);
+    void set_companions_enabled(bool on) noexcept;
+    bool companions_enabled() const noexcept { return companions_enabled_.load(std::memory_order_acquire); }
+    std::uint32_t companion_spell_count() const;
 
     // Identity queries & updates.
     bool resolve_label(std::uint8_t job, std::uint8_t branch, bool full, std::string& out) const;
@@ -292,6 +312,7 @@ private:
     static std::uint64_t make_action_key(std::uint8_t job, std::uint8_t branch, ActionKind kind, std::uint16_t id) noexcept;
 
     std::atomic<bool> enabled_{false};
+    std::atomic<bool> companions_enabled_{false};
     std::atomic<std::uint32_t> capabilities_{0};
     std::atomic<std::uint32_t> action_row_limit_{16};
     std::atomic<std::uint32_t> pending_core_opens_{0};
@@ -309,6 +330,8 @@ private:
     std::uint32_t action_generation_ = 0;
 
     std::unordered_map<std::uint64_t, VisibilityRecord> visibility_;
+    std::unordered_map<std::uint16_t, CompanionSpellEntry> companion_spells_;
+    std::string companion_hash_;
 
     std::vector<WeaponRuleRecord> weapon_rules_;
     std::vector<AppearanceMaskRecord> appearance_masks_;

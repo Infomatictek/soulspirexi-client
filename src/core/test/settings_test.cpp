@@ -763,6 +763,45 @@ int main()
         RemoveDirectoryW(base.c_str());
     }
 
+    // QA-SOUL-COMPANIONS-001: VanaCore-native Soul Companion Magic visibility & naming tests
+    {
+        using namespace vanacore::soulspire;
+        EngineState st;
+        st.set_enabled(true);
+        const char* sample_json = R"({
+            "companionHash": "test1234",
+            "companions": [
+                {"spellId": 896, "soulId": "war_support", "displayName": "Commander", "description": "WAR Commander (SUPPORT)"},
+                {"spellId": 897, "soulId": "war_dps", "displayName": "Berserker", "description": "WAR Berserker (DPS)"}
+            ]
+        })";
+        check(st.load_companions_json(sample_json), "load_companions_json parses canonical Soul Companion JSON");
+        check(st.companion_spell_count() == 2, "companion_spell_count reports loaded companion spells");
+        check(!st.companions_enabled(), "companions_enabled defaults to false (fail-closed)");
+        check(st.decide_visibility(ActionKind::Spell, 897) == VisibilityDecision::Hide,
+              "unauthorized client hides Soul Companion spell 897");
+        check(st.decide_visibility(ActionKind::Spell, 980) == VisibilityDecision::Hide,
+              "legacy Trust spell 980 is always hidden");
+
+        ActionRecord rec{};
+        check(!st.lookup_action(ActionKind::Spell, 897, rec),
+              "lookup_action refuses companion spell name when unauthorized");
+
+        check(st.observe_sscmp_frame("enabled=1|hash=test1234"), "observe_sscmp_frame parses enabled=1");
+        check(st.companions_enabled(), "companions_enabled becomes true after server frame");
+        check(st.decide_visibility(ActionKind::Spell, 897) == VisibilityDecision::Show,
+              "authorized tester sees Soul Companion spell 897");
+        check(st.decide_visibility(ActionKind::Spell, 980) == VisibilityDecision::Hide,
+              "legacy Trust spell 980 remains hidden even when authorized");
+        check(st.lookup_action(ActionKind::Spell, 897, rec) && rec.name == "Berserker",
+              "lookup_action returns canonical Soul name Berserker for spell 897");
+
+        st.reset_session();
+        check(!st.companions_enabled(), "reset_session resets companions_enabled to false (fail-closed)");
+        check(st.decide_visibility(ActionKind::Spell, 897) == VisibilityDecision::Hide,
+              "companion spell 897 hidden again after session reset");
+    }
+
     printf("\n%s (%d failed)\n", g_failed == 0 ? "PASS" : "FAIL", g_failed);
     return g_failed == 0 ? 0 : 1;
 }

@@ -319,6 +319,9 @@ void EngineState::reset_all()
     actions_.clear();
     action_generation_ = 0;
     visibility_.clear();
+    companion_spells_.clear();
+    companion_hash_.clear();
+    companions_enabled_.store(false, std::memory_order_release);
     weapon_rules_.clear();
     appearance_masks_.clear();
     ranged_only_.clear();
@@ -350,6 +353,7 @@ void EngineState::reset_session()
     hud_.kv.clear();
     hud_.updated_ms = 0;
     mobs_.clear();
+    companions_enabled_.store(false, std::memory_order_release);
 }
 
 bool EngineState::load_identities_json(std::string_view json_text, std::string_view source_label)
@@ -810,6 +814,19 @@ bool EngineState::set_action_row_limit(std::uint32_t limit)
 bool EngineState::lookup_action(ActionKind kind, std::uint16_t action_id, ActionRecord& out) const
 {
     std::lock_guard lock(mutex_);
+    if (kind == ActionKind::Spell && action_id >= kTrustSpellBaseId && action_id <= kTrustSpellLastSoulId) {
+        if (!companions_enabled_.load(std::memory_order_acquire))
+            return false;
+        const auto cit = companion_spells_.find(action_id);
+        if (cit == companion_spells_.end())
+            return false;
+        out = {};
+        out.kind = ActionKind::Spell;
+        out.action_id = action_id;
+        out.name = cit->second.name;
+        out.description = cit->second.description;
+        return true;
+    }
     if (!active_.known || active_.job < 1 || active_.job > 22 || active_.branch < 1 || active_.branch > 3)
         return false;
     const auto it = actions_.find(make_action_key(active_.job, active_.branch, kind, action_id));
@@ -886,6 +903,15 @@ void EngineState::clear_visibility()
 VisibilityDecision EngineState::decide_visibility(ActionKind kind, std::uint16_t action_id, std::uint8_t level_override) const
 {
     std::lock_guard lock(mutex_);
+    if (kind == ActionKind::Spell && action_id >= kTrustSpellBaseId && action_id <= kTrustSpellMaxId) {
+        // Legacy Trust spells (962..1017) are permanently hidden in SoulspireXI.
+        if (action_id > kTrustSpellLastSoulId)
+            return VisibilityDecision::Hide;
+        // Soul Companion spells (896..961) are visible ONLY when server authorized.
+        if (!companions_enabled_.load(std::memory_order_acquire))
+            return VisibilityDecision::Hide;
+        return companion_spells_.count(action_id) > 0 ? VisibilityDecision::Show : VisibilityDecision::Hide;
+    }
     if (!active_.known || active_.job < 1 || active_.job > 22 || active_.branch < 1 || active_.branch > 3)
         return VisibilityDecision::Unmanaged;
     const std::uint8_t level = level_override > 0 ? level_override : active_.effective_level;
@@ -899,6 +925,107 @@ VisibilityDecision EngineState::decide_visibility(ActionKind kind, std::uint16_t
         return level >= rule.min_effective_level ? VisibilityDecision::Hide : VisibilityDecision::Unmanaged;
     }
     return level >= rule.min_effective_level ? VisibilityDecision::Show : VisibilityDecision::Hide;
+}
+
+bool EngineState::load_companions_json(std::string_view json_text)
+{
+    if (json_text.empty() || json_text.size() > 256 * 1024)
+        return false;
+    JsonScan s{json_text.data(), json_text.data() + json_text.size()};
+    if (!s.take('{'))
+        return false;
+
+    std::unordered_map<std::uint16_t, CompanionSpellEntry> next_spells;
+    std::string next_hash;
+
+    while (!s.take('}')) {
+        std::string key;
+        if (!s.parse_string(key) || !s.take(':'))
+            return false;
+        if (key == "companionHash") {
+            if (!s.parse_string(next_hash))
+                return false;
+        } else if (key == "companions") {
+            if (!s.take('['))
+                return false;
+            while (!s.take(']')) {
+                if (!s.take('{'))
+                    return false;
+                CompanionSpellEntry rec{};
+                while (!s.take('}')) {
+                    std::string fkey;
+                    if (!s.parse_string(fkey) || !s.take(':'))
+                        return false;
+                    if (fkey == "spellId") {
+                        std::int64_t v = 0;
+                        if (!s.parse_int(v)) return false;
+                        if (v >= kTrustSpellBaseId && v <= kTrustSpellLastSoulId)
+                            rec.spell_id = static_cast<std::uint16_t>(v);
+                    } else if (fkey == "soulId") {
+                        if (!s.parse_string(rec.soul_id)) return false;
+                    } else if (fkey == "displayName") {
+                        if (!s.parse_string(rec.name)) return false;
+                    } else if (fkey == "description") {
+                        if (!s.parse_string(rec.description)) return false;
+                    } else {
+                        if (!s.skip_value()) return false;
+                    }
+                    s.take(',');
+                }
+                if (rec.spell_id >= kTrustSpellBaseId && rec.spell_id <= kTrustSpellLastSoulId && !rec.name.empty()) {
+                    next_spells[rec.spell_id] = std::move(rec);
+                }
+                s.take(',');
+            }
+        } else {
+            if (!s.skip_value())
+                return false;
+        }
+        s.take(',');
+    }
+
+    if (next_spells.empty())
+        return false;
+
+    std::lock_guard lock(mutex_);
+    companion_spells_ = std::move(next_spells);
+    companion_hash_ = std::move(next_hash);
+    return true;
+}
+
+bool EngineState::observe_sscmp_frame(std::string_view payload)
+{
+    if (payload.empty())
+        return false;
+    bool parsed = false;
+    std::size_t pos = 0;
+    while (pos < payload.size()) {
+        const std::size_t bar = payload.find('|', pos);
+        const std::string_view part = (bar == std::string_view::npos)
+            ? payload.substr(pos)
+            : payload.substr(pos, bar - pos);
+        if (part.starts_with("enabled=")) {
+            const std::string_view val = part.substr(8);
+            const bool on = (val == "1" || val == "true");
+            companions_enabled_.store(on, std::memory_order_release);
+            parsed = true;
+        }
+        if (bar == std::string_view::npos)
+            break;
+        pos = bar + 1;
+    }
+    return parsed;
+}
+
+void EngineState::set_companions_enabled(bool on) noexcept
+{
+    companions_enabled_.store(on, std::memory_order_release);
+}
+
+std::uint32_t EngineState::companion_spell_count() const
+{
+    std::lock_guard lock(mutex_);
+    return static_cast<std::uint32_t>(companion_spells_.size());
 }
 
 bool EngineState::has_weapon_rules_for_active() const
