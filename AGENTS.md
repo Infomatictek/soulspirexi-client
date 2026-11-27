@@ -7,14 +7,17 @@ Before making changes, recover full cross-repository project context from the Pr
 - Primary recovery doc: `docs/project/AI_CONTEXT_RECOVERY.md`
 - Active tasks & WIP cap (max 3): `docs/project/ACTIVE_TASKS.md`
 - Open blockers: `docs/project/BLOCKERS.md`
-- Architecture decisions (`DEC-001`–`DEC-028`): `docs/project/DECISIONS.md`
+- Architecture & governance decisions (`DEC-001`–`DEC-030`, including `DEC-030` GitHub synchronization & task completion contract): `docs/project/DECISIONS.md` and `Infomatictek/soulspirexi` `AGENTS.md` Section 5
+- System & deployment registry: `docs/project/SYSTEM_REGISTRY.md`
 - Native client migration architecture: `docs/architecture/CLIENT_MODERN_001_VANACORE_NATIVE_ARCHITECTURE.md`
 
 ## Repository Role & Canonical Branch
 
 - **Purpose:** SoulspireXI's native Windows FFXI client fork based on upstream [`CatsAndBoats/VanaCore`](https://github.com/CatsAndBoats/VanaCore) (GPL-3.0-or-later with Section 7 Term 4).
-- **Active Development Branch:** `feat/vanacore-native-soulspire` (tagged as `v0.9.9-soulspire-native.<N>`).
-- **Upstream Baseline:** `CatsAndBoats/VanaCore` commit `04545ec52120c2df527ac3c0c4ab32392cfc10c5` (do not blindly rebase/replace without reviewing `UPSTREAM_SYNC.md` and `docs/retail-signatures.md`).
+- **Canonical SoulspireXI Development Branch:** `feat/vanacore-native-soulspire` (tagged as `v0.9.9-soulspire-native.<N>`), **NOT** upstream `main`.
+- **Upstream Baseline (`main`):** Intentionally tracks upstream `CatsAndBoats/VanaCore` commit `04545ec52120c2df527ac3c0c4ab32392cfc10c5` (do not commit Soulspire changes to `main` or blindly rebase without reviewing `UPSTREAM_SYNC.md` and `docs/retail-signatures.md`).
+- **New Worktrees & Branches:** Always create new SoulspireXI client development worktrees and feature branches from `origin/feat/vanacore-native-soulspire` (e.g., `git worktree add -b feat/<name> <path> origin/feat/vanacore-native-soulspire`), never from upstream `main`.
+- **Sync & Completion Contract (`DEC-030`):** All tasks must satisfy the 9-point GitHub synchronization and completion contract in `Infomatictek/soulspirexi` `AGENTS.md` Section 5.
 
 ## Non-Negotiable Rules
 
