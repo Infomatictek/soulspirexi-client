@@ -978,7 +978,11 @@ bool EngineState::load_companions_json(std::string_view json_text)
                     s.take(',');
                 }
                 if (rec.spell_id >= kTrustSpellBaseId && rec.spell_id <= kTrustSpellLastSoulId && !rec.name.empty()) {
-                    next_spells[rec.spell_id] = std::move(rec);
+                    rec.name = sanitize_ascii(rec.name, 79);
+                    rec.description = sanitize_ascii(rec.description, 191);
+                    if (!rec.name.empty()) {
+                        next_spells[rec.spell_id] = std::move(rec);
+                    }
                 }
                 s.take(',');
             }
