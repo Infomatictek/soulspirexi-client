@@ -1356,7 +1356,7 @@ enum class Lines { All, Plugins, Rest };
 // Server-required extensions forced on at boot and protected from player unload/removal (CLIENT-ADDON-001).
 // Gated on [soulspire] enabled!=0 so Modern Baseline ([soulspire] enabled=0) remains cleanly isolated.
 constexpr std::initializer_list<const char*> kRequiredPlugins = {};
-constexpr std::initializer_list<const char*> kRequiredAddons = {"soulspire_core"};
+constexpr const char* kRequiredAddons[] = {"soulspire_core"};
 
 bool is_required(std::string_view name, bool plugin)
 {
