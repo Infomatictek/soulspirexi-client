@@ -780,14 +780,14 @@ int main()
         using namespace vanacore::soulspire;
         EngineState st;
         st.set_enabled(true);
-        const char* sample_json = R"({
+        const char* sample_json = R"json({
             "companionHash": "test1234",
             "categoryLabel": "Soul Companions",
             "companions": [
                 {"spellId": 896, "soulId": "war_support", "displayName": "Commander", "description": "WAR Commander (SUPPORT)"},
                 {"spellId": 897, "soulId": "war_dps", "displayName": "Berserker", "description": "WAR Berserker (DPS)"}
             ]
-        })";
+        })json";
         check(st.load_companions_json(sample_json), "load_companions_json parses canonical Soul Companion JSON");
         check(st.companion_category_label() == "Soul Companions",
               "companion_category_label returns canonical Soul Companions category");
