@@ -12,6 +12,8 @@
 #include "../gfx/vanacore_gfx.h"
 #include "chatfont.hpp"
 #include "gameui.hpp"
+#include "soulspire/echoes_rebrand.hpp"
+#include "soulspire/state.hpp"
 #include "text.hpp"
 #include "textcache.hpp"
 #include "uispace.hpp"
@@ -312,7 +314,14 @@ void keep(const Frame& f, const Label& label, int x, int y, std::uint32_t colour
     t.colour = drawn_colour(label.tint, colour);
     t.under_x = label.under_x, t.under_y = label.under_y;
     t.under = static_cast<std::uint8_t>(std::min<std::uint32_t>(255, label.under * (colour >> 24) / 64));
-    std::memcpy(t.text, label.text, sizeof t.text);
+    if (soulspire::engine().enabled()) {
+        const std::string rebranded = soulspire::rebrand_echoes_text(std::string_view(label.text, label.n));
+        const std::size_t copy_n = std::min(rebranded.size(), sizeof(t.text) - 1u);
+        std::memcpy(t.text, rebranded.data(), copy_n);
+        t.text[copy_n] = '\0';
+    } else {
+        std::memcpy(t.text, label.text, sizeof t.text);
+    }
 }
 
 // A text's look: its area's True Font as built with its outline in the same picture, in the colour the game drew its letters

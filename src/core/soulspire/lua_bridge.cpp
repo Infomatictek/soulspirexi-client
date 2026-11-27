@@ -497,6 +497,13 @@ int l_companion_category_label(lua_State* L)
     return 1;
 }
 
+int l_companion_system_name(lua_State* L)
+{
+    const std::string name = engine().companion_system_name();
+    lua_pushlstring(L, name.data(), name.size());
+    return 1;
+}
+
 int l_diagnostics(lua_State* L)
 {
     const DiagnosticsSnapshot d = engine().diagnostics();
@@ -535,6 +542,8 @@ int l_diagnostics(lua_State* L)
     lua_pushinteger(L, static_cast<lua_Integer>(engine().companion_spell_count())); lua_setfield(L, -2, "companion_spell_count");
     const std::string cmp_cat = engine().companion_category_label();
     lua_pushlstring(L, cmp_cat.data(), cmp_cat.size()); lua_setfield(L, -2, "companion_category_label");
+    const std::string cmp_sys = engine().companion_system_name();
+    lua_pushlstring(L, cmp_sys.data(), cmp_sys.size()); lua_setfield(L, -2, "companion_system_name");
 
     lua_newtable(L);
     for (std::size_t i = 0; i < d.hooks.size(); ++i) {
@@ -589,6 +598,7 @@ void push(lua_State* L)
     set_fn(L, "ashita_compat_enabled",    &l_ashita_compat_enabled);
     set_fn(L, "companions_enabled",       &l_companions_enabled);
     set_fn(L, "companion_category_label", &l_companion_category_label);
+    set_fn(L, "companion_system_name",    &l_companion_system_name);
     set_fn(L, "diagnostics",              &l_diagnostics);
 }
 

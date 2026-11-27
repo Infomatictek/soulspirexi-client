@@ -3,6 +3,9 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <memory>
+#include <mutex>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -10,6 +13,7 @@
 #include "../gui.hpp"
 #include "../log.hpp"
 #include "../window.hpp"
+#include "echoes_rebrand.hpp"
 #include "hooks.hpp"
 #include "input_ownership.hpp"
 #include "lua_bridge.hpp"
@@ -111,7 +115,7 @@ bool reload_registries()
     used.clear();
     if (load_first_existing(companion_paths, json, used)) {
         if (engine().load_companions_json(json)) {
-            log::write(L"Soulspire: loaded %u Soul Companion spells from %ls",
+            log::write(L"Soulspire: loaded %u Soul Echoes spells from %ls",
                        engine().companion_spell_count(), used.c_str());
             any_loaded = true;
         } else {
@@ -228,6 +232,121 @@ bool suppress_incoming_for_game(std::uint16_t id, const std::uint8_t* data, std:
 void push_lua_api(lua_State* L)
 {
     lua_bridge::push(L);
+}
+
+namespace {
+
+constexpr std::size_t kEchoesPassthroughCap = 256u;
+struct EchoesShapeCacheState {
+    std::mutex mutex;
+    std::unique_ptr<EchoesMenuSpriteBank> banks[kEchoesMaxSpriteBanks]{};
+    const void* passthrough[kEchoesPassthroughCap]{};
+    std::size_t passthrough_next = 0;
+};
+
+EchoesShapeCacheState& echoes_shape_cache()
+{
+    static EchoesShapeCacheState state;
+    return state;
+}
+
+bool seh_read_shape_header(const void* shape, std::uint8_t (&hdr)[16]) noexcept
+{
+    __try {
+        std::memcpy(hdr, shape, sizeof(hdr));
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool seh_decode_button(const void* shape, DecodedButtonSprite& out) noexcept
+{
+    __try {
+        return decode_button_sprite_label(static_cast<const std::uint8_t*>(shape), out);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool seh_synthesize_button(
+    EchoesMenuSpriteBank& bank,
+    const void* shape,
+    const DecodedButtonSprite& decoded,
+    const char* label,
+    std::size_t label_len) noexcept
+{
+    __try {
+        return synthesize_echoes_button_sprite(
+            bank, static_cast<const std::uint8_t*>(shape), decoded, std::string_view(label, label_len));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+} // namespace
+
+void* rebrand_menu_shape(void* shape) noexcept
+{
+    if (shape == nullptr || !engine().enabled())
+        return shape;
+
+    auto& cache = echoes_shape_cache();
+    std::uint8_t hdr[16]{};
+    if (!seh_read_shape_header(shape, hdr))
+        return shape;
+
+    std::lock_guard lock(cache.mutex);
+
+    // Fast path: check already-synthesized banks (also avoids re-processing our own bank sprites).
+    for (std::size_t i = 0; i < kEchoesMaxSpriteBanks; ++i) {
+        if (cache.banks[i] == nullptr || !cache.banks[i]->active)
+            continue;
+        if (shape == cache.banks[i]->sprite)
+            return shape;
+        if (cache.banks[i]->orig_shape == shape &&
+            std::memcmp(cache.banks[i]->orig_hdr, hdr, sizeof(hdr)) == 0) {
+            return cache.banks[i]->sprite;
+        }
+    }
+
+    // Fast path: non-Trust shape already inspected.
+    for (std::size_t i = 0; i < kEchoesPassthroughCap; ++i) {
+        if (cache.passthrough[i] == shape)
+            return shape;
+    }
+
+    DecodedButtonSprite decoded{};
+    if (!seh_decode_button(shape, decoded)) {
+        cache.passthrough[cache.passthrough_next] = shape;
+        cache.passthrough_next = (cache.passthrough_next + 1u) % kEchoesPassthroughCap;
+        return shape;
+    }
+
+    std::string target_label;
+    const int pill_w = decoded.pill_right - decoded.pill_left;
+    if (!choose_fitted_echoes_button_label(decoded.label_view(), pill_w, target_label)) {
+        cache.passthrough[cache.passthrough_next] = shape;
+        cache.passthrough_next = (cache.passthrough_next + 1u) % kEchoesPassthroughCap;
+        return shape;
+    }
+
+    for (std::size_t i = 0; i < kEchoesMaxSpriteBanks; ++i) {
+        if (cache.banks[i] == nullptr) {
+            auto fresh = std::unique_ptr<EchoesMenuSpriteBank>(new (std::nothrow) EchoesMenuSpriteBank{});
+            if (fresh == nullptr)
+                break;
+            if (!seh_synthesize_button(*fresh, shape, decoded, target_label.data(), target_label.size()))
+                break;
+            void* replaced = fresh->sprite;
+            cache.banks[i] = std::move(fresh);
+            log::write(L"Soulspire: rebranded native menu button \"%hs\" -> \"%hs\" (pill=%dpx)",
+                       decoded.label, target_label.c_str(), pill_w);
+            return replaced;
+        }
+    }
+
+    return shape;
 }
 
 } // namespace vanacore::soulspire
