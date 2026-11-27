@@ -829,17 +829,29 @@ local function pivot_root()
     return root
 end
 
--- [pivot.order]'s overlays, lowest number first, without soulspirexi: the server's own (the DATs for its custom
--- content), which the client uses first whenever the pivot folder has it, listed or not (true as the second value).
+-- Mandatory SoulspireXI server overlays (always on, always first in order, locked in /vana Pivot tab).
+local SERVER_OVERLAYS = { 'soulspirexi', 'flintlock-akimbo-compact' }
+local SERVER_OVERLAY_SET = { soulspirexi = true, ['flintlock-akimbo-compact'] = true }
+
+-- [pivot.order]'s overlays, lowest number first, without mandatory server overlays: the server's own
+-- (base custom DATs + protected COR Flintlock dual-pistol DATs), which the client uses first whenever
+-- the pivot folder has them, listed or not (returns list of present server overlays as second value).
 local function pivot_order()
     local order = {}
     for n = 0, 99 do
         local name = ini_value('pivot.order', tostring(n))
-        if name ~= nil and name ~= '' and name:lower():gsub('[\\/]+$', '') ~= 'soulspirexi' then
+        if name ~= nil and name ~= '' and not SERVER_OVERLAY_SET[name:lower():gsub('[\\/]+$', '')] then
             order[#order + 1] = name
         end
     end
-    return order, vana.fs.is_dir(pivot_root() .. '\\soulspirexi') == true
+    local root = pivot_root()
+    local present_server = {}
+    for _, ov in ipairs(SERVER_OVERLAYS) do
+        if vana.fs.is_dir(root .. '\\' .. ov) == true then
+            present_server[#present_server + 1] = ov
+        end
+    end
+    return order, present_server
 end
 
 -- A folder laid out like the FFXI folder: a ROM folder (ROM, ROM2 ...), a sound folder (sound,
@@ -871,7 +883,7 @@ end
 local function pivot_overlays()
     local root = pivot_root()
     local on, server = pivot_order()
-    local listed, off = { soulspirexi = true }, {}
+    local listed, off = { soulspirexi = true, ['flintlock-akimbo-compact'] = true }, {}
     for _, name in ipairs(on) do
         listed[name:lower():gsub('/', '\\')] = true
     end
@@ -883,11 +895,11 @@ local function pivot_overlays()
     return on, off, root, server
 end
 
--- [pivot.order] written afresh from `order` (0 first), soulspirexi first when the pivot folder has it.
+-- [pivot.order] written afresh from `order` (0 first), mandatory server overlays first when the pivot folder has them.
 local function write_order(order)
     local _, server = pivot_order()
-    if server then
-        table.insert(order, 1, 'soulspirexi')
+    for i = #server, 1, -1 do
+        table.insert(order, 1, server[i])
     end
     for n = 0, 99 do
         if vana.config.get('pivot.order', tostring(n)) ~= nil then
@@ -993,9 +1005,9 @@ local function extension_rows(what)
     if loaded == nil then
         return { header(plural), note("This VanaCore can't say what is loaded: update it.") }
     end
-    -- first in their list whatever the name; keybinds (always on) has no switch
-    local first = { addon = { vana = 1, keybinds = 2 }, plugin = {} }
-    local fixed = { addon = { keybinds = true }, plugin = {} }
+    -- first in their list whatever the name; keybinds and soulspire_core (protected core) have no switch
+    local first = { addon = { vana = 1, keybinds = 2, soulspire_core = 3 }, plugin = {} }
+    local fixed = { addon = { keybinds = true, soulspire_core = true }, plugin = {} }
     local wanted = query[what]:lower()
     local on, off = {}, {}
     for _, entry in ipairs(folder_extensions(what)) do
@@ -6493,13 +6505,13 @@ local TABS = {
             end
             if not vana.fs.is_dir(root) then
                 rows[#rows + 1] = alert('Folder not found: no overlay is used')
-            elseif not server then
+            elseif #server == 0 then
                 rows[#rows + 1] = alert("No soulspirexi folder in it: SoulspireXI's own DATs (items, custom content) aren't used")
             end
             rows[#rows + 1] = header('Overlays')
             rows[#rows + 1] = note('Top to bottom: the first with a file serves it. Applies from the next zone.')
-            if server then
-                rows[#rows + 1] = overlay('soulspirexi', true, nil, nil, true)
+            for _, ov in ipairs(server) do
+                rows[#rows + 1] = overlay(ov, true, nil, nil, true)
             end
             for i, name in ipairs(on) do
                 local row = overlay(name, true, i, #on)
@@ -6509,7 +6521,7 @@ local TABS = {
                 end
                 rows[#rows + 1] = row
             end
-            if not server and #on == 0 then
+            if #server == 0 and #on == 0 then
                 rows[#rows + 1] = note('None in use: switch one on below.')
             end
             rows[#rows + 1] = header('Available')
