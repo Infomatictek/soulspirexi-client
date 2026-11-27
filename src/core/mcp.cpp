@@ -612,11 +612,12 @@ bool g_announced = false;
 std::wstring g_ini;
 ULONGLONG g_ini_checked = 0;
 
-// [mcp] available=0: a server that doesn't want AI tools in its players' games turns the whole feature off. The
-// server never starts, whatever enabled says, and the /vana window leaves its AI MCP rows out.
+// [mcp] available=0 (SoulspireXI default): a server that doesn't want AI tools in its players' games turns the whole
+// feature off. The server never starts, whatever enabled says, and the /vana window leaves its AI MCP rows out.
+// Developers and Client Sentinel explicitly opt in via [mcp] available=1 in their local test INI.
 bool available(const wchar_t* ini)
 {
-    return GetPrivateProfileIntW(L"mcp", L"available", 1, ini) != 0;
+    return GetPrivateProfileIntW(L"mcp", L"available", 0, ini) != 0;
 }
 
 // [mcp] enabled=1 and available (the default)

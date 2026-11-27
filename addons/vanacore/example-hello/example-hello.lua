@@ -8,7 +8,7 @@ In game:
 --]]
 
 addon.name    = 'example-hello'
-addon.author  = 'Vekien'
+addon.author  = 'SoulspireXI / VanaCore SDK Example'
 addon.version = '1.0'
 addon.desc    = 'Shows a box that says hello world.'
 

@@ -663,6 +663,20 @@ int main()
             vanacore::loader::classify_game_start_exit(S_OK, true, vanacore::kExitGameStartFailed);
         check(clean_exit.outcome == vanacore::loader::GameStartOutcome::CleanExit && clean_exit.exit_code == 0,
               "GameStart return after Direct3DCreate8 classifies as CleanExit (exit 0)");
+
+        // PLAYER-CMD-001: Verify [mcp] available and [developer] enabled default to 0 (fail-closed)
+        const std::wstring default_ini = root + L"\\player_default.ini";
+        write_file(default_ini, "[server]\r\nserver=play.soulspirexi.com\r\n");
+        check(GetPrivateProfileIntW(L"mcp", L"available", 0, default_ini.c_str()) == 0,
+              "MCP [mcp] available defaults to 0 when omitted");
+        check(GetPrivateProfileIntW(L"developer", L"enabled", 0, default_ini.c_str()) == 0,
+              "Developer [developer] enabled defaults to 0 when omitted");
+        const std::wstring optin_ini = root + L"\\dev_optin.ini";
+        write_file(optin_ini, "[mcp]\r\navailable=1\r\n[developer]\r\nenabled=1\r\n");
+        check(GetPrivateProfileIntW(L"mcp", L"available", 0, optin_ini.c_str()) == 1,
+              "MCP [mcp] available honors explicit available=1 opt-in");
+        check(GetPrivateProfileIntW(L"developer", L"enabled", 0, optin_ini.c_str()) == 1,
+              "Developer [developer] enabled honors explicit enabled=1 opt-in");
     }
 
     printf("\n%s (%d failed)\n", g_failed == 0 ? "PASS" : "FAIL", g_failed);

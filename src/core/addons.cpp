@@ -1239,6 +1239,12 @@ void addon_command(const std::vector<std::string>& parts, bool typed)
             return;
         }
         if (action == "exec") {
+            const bool dev_enabled =
+                !g_settings_ini.empty() && GetPrivateProfileIntW(L"developer", L"enabled", 0, g_settings_ini.c_str()) != 0;
+            if (!dev_enabled) {
+                say_error("/addon exec is disabled in player builds (set [developer] enabled=1 in vanacore.ini).");
+                return;
+            }
             // An addon's code runs at the game's Present, as its present event does (see below)
             if (!g_in_frame) {
                 g_frame_commands.push_back({parts, typed});
@@ -2124,6 +2130,12 @@ bool vanacore_command(std::string_view line)
             return true;
         }
         if (sub == "lua") {
+            const bool dev_enabled =
+                !g_settings_ini.empty() && GetPrivateProfileIntW(L"developer", L"enabled", 0, g_settings_ini.c_str()) != 0;
+            if (!dev_enabled) {
+                say_error("/vana lua is disabled in player builds (set [developer] enabled=1 in vanacore.ini).");
+                return true;
+            }
             lua_eval(line);
             return true;
         }
