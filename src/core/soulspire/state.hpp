@@ -107,6 +107,7 @@ struct DynamicSpellEntry {
 struct DynamicSpellbookRuntime {
     bool active = false;
     bool replace_base = false;
+    bool replace_base_abilities = false;
     std::string soul_key;
     std::uint8_t level = 0;
     std::string pet_type;
@@ -116,6 +117,7 @@ struct DynamicSpellbookRuntime {
     std::uint16_t weapon_skill = 0;
     std::string stance;
     std::vector<std::uint16_t> allowed_spells;
+    std::vector<std::uint16_t> allowed_abilities;
 };
 
 struct ActiveSoul {

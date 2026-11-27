@@ -931,6 +931,24 @@ int main()
         std::memcpy(pkt.data() + 23, frame, std::strlen(frame));
         check(packets::should_suppress_for_game(st, 0x017, pkt.data(), pkt.size()),
               "[SSDSB]| transport frame is suppressed from game chat");
+
+        // Phase 2: Universal Job & Pet Ability Filtering
+        check(st.observe_ssdsb_frame(
+                  "active=1|soul=necromancer|level=75|replace_base=1|replace_base_abilities=1|pet_type=dullahan|pet_alive=1|allowed=715,723|allowed_abilities=69,70,71,72,73"),
+              "observe_ssdsb_frame parses replace_base_abilities & allowed_abilities");
+        // Universal pet command Fight (server 69 -> client 512+69=581) stays visible
+        check(st.decide_visibility(ActionKind::Ability, 512 + 69) == VisibilityDecision::Show,
+              "universal pet command Fight (69/581) remains visible for Necromancer");
+        // Traditional BLM Manafont (server 35 -> client 547) and retired Necro ability (405 -> 917) hidden
+        check(st.decide_visibility(ActionKind::Ability, 512 + 35) == VisibilityDecision::Hide,
+              "unauthorized BLM Manafont (35/547) hidden for Necromancer");
+        check(st.decide_visibility(ActionKind::Ability, 512 + 405) == VisibilityDecision::Hide,
+              "retired Necromancer Summon ability (405/917) hidden");
+        // Leaving Necromancer restores base BLM abilities immediately
+        check(st.observe_ssdsb_frame("active=0|soul=astromancer|replace_base=0|replace_base_abilities=0|allowed=|allowed_abilities="),
+              "observe_ssdsb_frame clears ability restriction on Soul change");
+        check(st.decide_visibility(ActionKind::Ability, 512 + 35) == VisibilityDecision::Unmanaged,
+              "BLM Manafont (35/547) restored when switching away from Necromancer");
     }
 
     printf("\n%s (%d failed)\n", g_failed == 0 ? "PASS" : "FAIL", g_failed);

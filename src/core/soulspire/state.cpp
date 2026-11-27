@@ -946,6 +946,14 @@ VisibilityDecision EngineState::decide_visibility(ActionKind kind, std::uint16_t
             return VisibilityDecision::Hide;
         }
     }
+    if (kind == ActionKind::Ability && dynamic_runtime_.active && dynamic_runtime_.replace_base_abilities) {
+        const std::uint16_t server_id = action_id >= 512u ? static_cast<std::uint16_t>(action_id - 512u) : action_id;
+        for (const std::uint16_t allowed_id : dynamic_runtime_.allowed_abilities) {
+            if (allowed_id == action_id || allowed_id == server_id)
+                return VisibilityDecision::Show;
+        }
+        return VisibilityDecision::Hide;
+    }
     if (!active_.known || active_.job < 1 || active_.job > 22 || active_.branch < 1 || active_.branch > 3)
         return VisibilityDecision::Unmanaged;
     const std::uint8_t level = level_override > 0 ? level_override : active_.effective_level;
@@ -1228,6 +1236,8 @@ bool EngineState::observe_ssdsb_frame(std::string_view payload)
                 parsed = true;
             } else if (k == "replace_base") {
                 next.replace_base = (v == "1" || v == "true");
+            } else if (k == "replace_base_abilities") {
+                next.replace_base_abilities = (v == "1" || v == "true");
             } else if (k == "soul") {
                 next.soul_key = normalize_soul_key(v);
             } else if (k == "level") {
@@ -1259,6 +1269,22 @@ bool EngineState::observe_ssdsb_frame(std::string_view payload)
                     if (!tok.empty() && std::from_chars(tok.data(), tok.data() + tok.size(), sid).ec == std::errc{} &&
                         sid >= 1 && sid <= 1023) {
                         next.allowed_spells.push_back(static_cast<std::uint16_t>(sid));
+                    }
+                    if (comma == std::string_view::npos)
+                        break;
+                    cpos = comma + 1;
+                }
+            } else if (k == "allowed_abilities") {
+                std::size_t cpos = 0;
+                while (cpos < v.size()) {
+                    const std::size_t comma = v.find(',', cpos);
+                    const std::string_view tok = (comma == std::string_view::npos)
+                        ? v.substr(cpos)
+                        : v.substr(cpos, comma - cpos);
+                    std::uint32_t aid = 0;
+                    if (!tok.empty() && std::from_chars(tok.data(), tok.data() + tok.size(), aid).ec == std::errc{} &&
+                        aid <= 2047) {
+                        next.allowed_abilities.push_back(static_cast<std::uint16_t>(aid));
                     }
                     if (comma == std::string_view::npos)
                         break;
