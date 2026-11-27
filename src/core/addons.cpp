@@ -1221,7 +1221,7 @@ void addon_command(const std::vector<std::string>& parts, bool typed)
         std::vector<Addon*> going;
         for (const auto& addon : g_addons)
             if (addon->context.flavour != Flavour::VanaCore && addon->source != Flavour::VanaCore &&
-                !is_required(addon->key, false) && !is_always_on(addon->key))
+                !is_required(addon->context.name, false) && !is_always_on(addon->context.name))
                 going.push_back(addon.get());
         for (auto it = going.rbegin(); it != going.rend(); ++it)
             unload(**it, false, "/addon unloadall");
@@ -1262,7 +1262,7 @@ void addon_command(const std::vector<std::string>& parts, bool typed)
         } else {
             const bool dev_enabled =
                 !g_settings_ini.empty() && GetPrivateProfileIntW(L"developer", L"enabled", 0, g_settings_ini.c_str()) != 0;
-            if (!dev_enabled && (is_required(addon->key, false) || is_always_on(addon->key))) {
+            if (!dev_enabled && (is_required(addon->context.name, false) || is_always_on(addon->context.name))) {
                 say_error(addon->display + " is a protected core addon and cannot be killed (/addon reload " + addon->display + " reloads it).");
                 return;
             }
