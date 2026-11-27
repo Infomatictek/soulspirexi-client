@@ -47,6 +47,17 @@ constexpr char kPatMenuWindRestoreCached[] = "E8 ?? ?? ?? ?? 83 7E 10 0E 74 24 8
 constexpr char kPatMenuWindRestoreFresh[]  = "E8 ?? ?? ?? ?? 8B 4E 0C 85 C9 74 05 8B 11 FF 52 04 8A 44 24 38 84 C0 74";
 constexpr char kPatMenuWindNextButton[]    = "E8 ?? ?? ?? ?? 8B F8 66 85 FF 0F 8C 84 01 00 00 57 8B CE E8";
 constexpr char kPatMenuWindKeyItem[]       = "0F BF 44 24 04 83 C0 FD 56 83 F8 19 8B F1 0F 87 CF 02 00 00 33 C9 8A 88";
+// Phase D weapon equipment & 3D presentation hooks (#22, #25-#27, #32-#35).
+constexpr char kPatCanEquipInSlot[]        = "E8 ?? ?? ?? ?? 84 C0 75 24 FE 8E B3 01 00 00 5F 5E 5D 32 C0 5B 83 C4 10";
+constexpr char kPatSubWeaponEquip[]        = "68 8B 00 00 00 E8 ?? ?? ?? ?? E9 D7 00 00 00 8A 44 24 10 84 C0 0F 84 DD";
+constexpr char kPatSubMenuFilter[]         = "85 46 F4 74 5F 8B 42 0C 33 DB 8A 5C 10 18 8D 04 C0 8D 04 C0 03 D8 66 89";
+constexpr char kPatSub2HMainEquip[]        = "68 99 00 00 00 E8 ?? ?? ?? ?? 8A 8E B3 01 00 00 FE C9 88 8E B3 01 00 00";
+constexpr char kPatGetInventoryItem[]      = "8B 15 ?? ?? ?? ?? 85 D2 75 03 33 C0 C3 8B 44 24 04 8B 4C 24 08 56 8B F1";
+constexpr char kPatGetItemResource[]       = "B8 AC 15 00 00 E8 ?? ?? ?? ?? 56 8B B4 24 B4 15 00 00 57 8B F9 85 F6 0F";
+constexpr char kPatPcSubModelResolve[]     = "8D 4C 6D 00 C1 E1 04 8B 04 95 ?? ?? ?? ?? 89 44 24 24 8D 34 01 8B 04 01";
+constexpr char kPatAttachEquipModel[]      = "8A 44 24 10 53 8B 5C 24 0C 55 C1 FB 0C 83 E3 0F 56 84 C0 57 8B F1 0F 84";
+constexpr char kPatModelPartAddMesh[]      = "E8 ?? ?? ?? ?? 8B 0E E8 ?? ?? ?? ?? 6A 00 8D 4C 24 14 E8 ?? ?? ?? ?? 8B";
+constexpr char kPatModelMeshDraw[]         = "8B 54 24 24 55 52 8B 54 24 34 53 52 FF 50 1C 8B 3F 83 C7 04 8B 37 85 F6";
 
 // Disambiguators for magic vs ability row name/desc/icon (both share similar surrounding code):
 // MagicRowName has `0x5D` (pop ebp) right after icon call; AbilityRowName does not.
@@ -129,6 +140,12 @@ using FfxiPrimSetSelectedFn  = void(__fastcall*)(void*, void*, std::int32_t);
 using FfxiListPushBackFn     = void(__fastcall*)(void*, void*, void*);
 using FfxiListRemoveNodeFn   = void(__fastcall*)(void*, void*, void*);
 using FfxiCloseMenuFn        = void(__fastcall*)(void*, void*, void*, std::int32_t);
+using GetInventoryItemFn     = const std::uint8_t*(__cdecl*)(std::uint32_t, std::uint32_t);
+using GetItemResourceFn      = const std::uint8_t*(__fastcall*)(void*, void*, std::uint32_t);
+using CanEquipItemInSlotFn   = std::uint8_t(__fastcall*)(void*, void*, const std::uint8_t*, std::uint32_t);
+using AttachEquipModelFn     = void(__fastcall*)(void*, void*, void*, std::uint32_t, std::uint32_t, std::uint8_t);
+using ModelPartAddMeshFn     = void*(__fastcall*)(void*, void*, void*);
+using LookupBoneIndexFn      = std::uint32_t(__fastcall*)(void*, void*, std::int32_t);
 
 // Saved originals & call patches
 CallPatch g_magic_row_patch{};
@@ -148,6 +165,8 @@ CallPatch g_full_job2_patch{};
 CallPatch g_menuwind_restore_cached_patch{};
 CallPatch g_menuwind_restore_fresh_patch{};
 CallPatch g_menuwind_next_button_patch{};
+CallPatch g_can_equip_in_slot_patch{};
+CallPatch g_model_part_add_mesh_patch{};
 
 std::uintptr_t g_orig_magic_name = 0;
 std::uintptr_t g_orig_magic_desc = 0;
@@ -200,6 +219,57 @@ std::size_t g_last_commands_sprite_bank = 0;
 std::atomic<const std::uint8_t*> g_active_menuwind_data{nullptr};
 std::atomic<std::uint32_t> g_commands_injected{0};
 std::atomic<bool> g_commands_ever_injected{false};
+
+// Phase D weapon equipment & 3D presentation state/callees (#22, #25-#27, #32-#35).
+void**                 g_item_res_mgr_slot = nullptr;
+GetInventoryItemFn     g_orig_get_inv_item = nullptr;
+GetItemResourceFn      g_orig_get_item_res = nullptr;
+CanEquipItemInSlotFn   g_orig_can_equip_in_slot = nullptr;
+std::uintptr_t         g_sub_weapon_allow_resume = 0;
+std::uintptr_t         g_sub_weapon_deny_resume = 0;
+std::uintptr_t         g_sub_menu_allow_resume = 0;
+std::uintptr_t         g_sub_menu_skip_resume = 0;
+std::uintptr_t         g_sub_2h_main_allow_resume = 0;
+std::uintptr_t         g_sub_2h_main_deny_resume = 0;
+std::uintptr_t         g_pc_sub_model_resume = 0;
+AttachEquipModelFn     g_orig_attach_equip_model = nullptr;
+ModelPartAddMeshFn     g_orig_model_part_add_mesh = nullptr;
+LookupBoneIndexFn      g_orig_lookup_bone_index = nullptr;
+std::uintptr_t         g_model_mesh_draw_resume = 0;
+
+struct SubOffhandMeshEntry {
+    void* actor = nullptr;
+    void* model_part = nullptr;
+    void* mesh = nullptr;
+};
+constexpr std::size_t kMaxSubOffhandMeshes = 64u;
+std::mutex g_sub_offhand_mesh_mutex;
+SubOffhandMeshEntry g_sub_offhand_meshes[kMaxSubOffhandMeshes]{};
+std::atomic<std::uint32_t> g_sub_offhand_mesh_count{0};
+
+thread_local bool  g_tls_sub_offhand_attach_active = false;
+thread_local void* g_tls_sub_offhand_attach_actor = nullptr;
+
+struct SavedBoneMatrixState {
+    bool   active = false;
+    float* target = nullptr;
+    float  saved[16]{};
+};
+thread_local SavedBoneMatrixState g_tls_saved_main_weapon_bone{};
+
+inline std::uint16_t read_u16_le(const std::uint8_t* p) noexcept
+{
+    std::uint16_t v = 0;
+    std::memcpy(&v, p, sizeof(v));
+    return v;
+}
+
+inline std::uint32_t read_u32_le(const std::uint8_t* p) noexcept
+{
+    std::uint32_t v = 0;
+    std::memcpy(&v, p, sizeof(v));
+    return v;
+}
 
 // Thread-local string buffers for FFXiMain.dll UI callbacks (game thread only).
 thread_local std::int32_t g_tls_magic_id = -1;
@@ -962,6 +1032,440 @@ __declspec(naked) void thunk_menuwind_key_item()
     }
 }
 
+// ============================================================================
+// Phase D — Native Weapon Equipment & 3D Presentation Hooks (#22, #25-#27, #32-#35)
+// ============================================================================
+
+std::uint8_t __stdcall soul_allows_sub_weapon(const std::uint8_t* sub_item_res, const std::uint8_t* stack_frame) noexcept
+{
+    if (!engine().enabled() || sub_item_res == nullptr || stack_frame == nullptr)
+        return 0;
+    if (g_orig_get_inv_item == nullptr || g_orig_get_item_res == nullptr || g_item_res_mgr_slot == nullptr)
+        return 0;
+    if (!engine().has_weapon_rules_for_active())
+        return 0;
+
+    const std::uint8_t main_slot = stack_frame[0x10];
+    if (main_slot == 0 || main_slot == 0xFFu)
+        return 0;
+    const std::uint32_t main_container = read_u32_le(stack_frame + 0x18);
+    const std::uint8_t* main_inv = g_orig_get_inv_item(main_container, static_cast<std::uint32_t>(main_slot));
+    if (main_inv == nullptr)
+        return 0;
+    const std::uint16_t main_item_id = read_u16_le(main_inv);
+    if (main_item_id == 0)
+        return 0;
+    void* res_mgr = *g_item_res_mgr_slot;
+    if (res_mgr == nullptr)
+        return 0;
+    const std::uint8_t* main_res = g_orig_get_item_res(res_mgr, nullptr, static_cast<std::uint32_t>(main_item_id));
+    if (main_res == nullptr)
+        return 0;
+
+    const std::uint16_t main_skill = read_u16_le(main_res + 0x10);
+    const std::uint16_t sub_item_id = read_u16_le(sub_item_res);
+    const std::uint16_t sub_skill = read_u16_le(sub_item_res + 0x10);
+    if (engine().allows_sub_weapon(main_skill, main_item_id, sub_skill, sub_item_id)) {
+        engine().increment_hook_hit("sub_weapon_equip");
+        return 1;
+    }
+    return 0;
+}
+
+__declspec(naked) void thunk_sub_weapon_equip()
+{
+    __asm {
+        pushfd
+        pushad
+        lea eax, [esp + 36]
+        push eax
+        push esi
+        call soul_allows_sub_weapon
+        test al, al
+        jz stock
+        popad
+        popfd
+        jmp dword ptr [g_sub_weapon_allow_resume]
+    stock:
+        popad
+        popfd
+        push 0x8b
+        jmp dword ptr [g_sub_weapon_deny_resume]
+    }
+}
+
+std::uint8_t __stdcall soul_allows_dual_2h_menu_item(std::uint32_t item_id) noexcept
+{
+    if (!engine().enabled() || item_id == 0 || item_id > 0xFFFFu)
+        return 0;
+    if (g_item_res_mgr_slot == nullptr || g_orig_get_item_res == nullptr)
+        return 0;
+    if (!engine().has_weapon_rules_for_active())
+        return 0;
+    void* res_mgr = *g_item_res_mgr_slot;
+    if (res_mgr == nullptr)
+        return 0;
+    const std::uint8_t* sub_res = g_orig_get_item_res(res_mgr, nullptr, item_id);
+    if (sub_res == nullptr)
+        return 0;
+    const std::uint16_t sub_skill = read_u16_le(sub_res + 0x10);
+    if (engine().allows_dual_2h_menu_item(sub_skill, static_cast<std::uint16_t>(item_id))) {
+        engine().increment_hook_hit("sub_menu_filter");
+        return 1;
+    }
+    return 0;
+}
+
+__declspec(naked) void thunk_sub_menu_filter()
+{
+    __asm {
+        test [esi - 0x0C], eax
+        jnz allow_item
+        cmp eax, 2
+        jne skip_item
+        test dword ptr [esi - 0x0C], 1
+        jz skip_item
+        pushfd
+        pushad
+        movzx eax, di
+        push eax
+        call soul_allows_dual_2h_menu_item
+        test al, al
+        jz deny_item
+        popad
+        popfd
+    allow_item:
+        jmp dword ptr [g_sub_menu_allow_resume]
+    deny_item:
+        popad
+        popfd
+    skip_item:
+        jmp dword ptr [g_sub_menu_skip_resume]
+    }
+}
+
+std::uint8_t __stdcall soul_allows_2h_main_with_sub(const std::uint8_t* main_res, const std::uint8_t* sub_res) noexcept
+{
+    if (!engine().enabled() || main_res == nullptr || sub_res == nullptr)
+        return 0;
+    const std::uint16_t main_item_id = read_u16_le(main_res);
+    const std::uint16_t main_skill = read_u16_le(main_res + 0x10);
+    const std::uint16_t sub_item_id = read_u16_le(sub_res);
+    const std::uint16_t sub_skill = read_u16_le(sub_res + 0x10);
+    if (engine().allows_2h_main_with_sub(main_skill, main_item_id, sub_skill, sub_item_id)) {
+        engine().record_local_equipped_weapons(main_item_id, main_skill, sub_item_id, sub_skill);
+        engine().increment_hook_hit("sub_2h_main_equip");
+        return 1;
+    }
+    return 0;
+}
+
+__declspec(naked) void thunk_sub_2h_main_equip()
+{
+    __asm {
+        pushfd
+        pushad
+        push esi
+        push edi
+        call soul_allows_2h_main_with_sub
+        test al, al
+        jz stock
+        popad
+        popfd
+        jmp dword ptr [g_sub_2h_main_allow_resume]
+    stock:
+        popad
+        popfd
+        push 0x99
+        jmp dword ptr [g_sub_2h_main_deny_resume]
+    }
+}
+
+std::uint8_t __fastcall hook_can_equip_in_slot(
+    void* self, void*, const std::uint8_t* parsed_item, std::uint32_t equip_slot) noexcept
+{
+    if (g_orig_can_equip_in_slot == nullptr)
+        return 0;
+    if (g_orig_can_equip_in_slot(self, nullptr, parsed_item, equip_slot) != 0)
+        return 1;
+    if (!engine().enabled() || equip_slot != 1u || parsed_item == nullptr)
+        return 0;
+    if (g_orig_can_equip_in_slot(self, nullptr, parsed_item, 0u) == 0)
+        return 0;
+    const std::uint16_t sub_item_id = read_u16_le(parsed_item + 0x14B0);
+    const std::uint16_t* skill_ptr = nullptr;
+    std::memcpy(&skill_ptr, parsed_item + 0x14E4, sizeof(skill_ptr));
+    if (skill_ptr == nullptr)
+        return 0;
+    if (engine().allows_dual_2h_menu_item(*skill_ptr, sub_item_id)) {
+        engine().increment_hook_hit("can_equip_in_slot");
+        return 1;
+    }
+    return 0;
+}
+
+bool safe_read_actor_server_id(const std::uint8_t* actor, std::uint32_t& out_actor_id) noexcept
+{
+    out_actor_id = 0;
+    if (actor == nullptr)
+        return false;
+    __try {
+        const std::uint8_t* ent = nullptr;
+        std::memcpy(&ent, actor + 0x70, sizeof(ent));
+        if (ent == nullptr)
+            return false;
+        std::memcpy(&out_actor_id, ent + 0x78, sizeof(out_actor_id));
+        return out_actor_id != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        out_actor_id = 0;
+        return false;
+    }
+}
+
+void clear_sub_offhand_meshes_for_actor(void* actor) noexcept
+{
+    if (actor == nullptr)
+        return;
+    std::lock_guard lock(g_sub_offhand_mesh_mutex);
+    std::uint32_t count = 0;
+    for (auto& e : g_sub_offhand_meshes) {
+        if (e.actor == actor) {
+            e = {};
+        } else if (e.mesh != nullptr) {
+            ++count;
+        }
+    }
+    g_sub_offhand_mesh_count.store(count, std::memory_order_release);
+}
+
+void clear_all_sub_offhand_meshes() noexcept
+{
+    std::lock_guard lock(g_sub_offhand_mesh_mutex);
+    for (auto& e : g_sub_offhand_meshes)
+        e = {};
+    g_sub_offhand_mesh_count.store(0u, std::memory_order_release);
+}
+
+void register_sub_offhand_mesh(void* actor, void* model_part, void* mesh) noexcept
+{
+    if (actor == nullptr || model_part == nullptr || mesh == nullptr)
+        return;
+    std::lock_guard lock(g_sub_offhand_mesh_mutex);
+    SubOffhandMeshEntry* free_slot = nullptr;
+    std::uint32_t count = 0;
+    bool exists = false;
+    for (auto& e : g_sub_offhand_meshes) {
+        if (e.model_part == model_part && e.mesh == mesh) {
+            e.actor = actor;
+            exists = true;
+        }
+        if (e.mesh != nullptr) {
+            ++count;
+        } else if (free_slot == nullptr) {
+            free_slot = &e;
+        }
+    }
+    if (!exists && free_slot != nullptr) {
+        free_slot->actor = actor;
+        free_slot->model_part = model_part;
+        free_slot->mesh = mesh;
+        ++count;
+    }
+    g_sub_offhand_mesh_count.store(count, std::memory_order_release);
+}
+
+bool is_registered_sub_offhand_mesh(void* model_part, void* mesh) noexcept
+{
+    if (model_part == nullptr || mesh == nullptr)
+        return false;
+    if (g_sub_offhand_mesh_count.load(std::memory_order_acquire) == 0u)
+        return false;
+    std::lock_guard lock(g_sub_offhand_mesh_mutex);
+    for (const auto& e : g_sub_offhand_meshes) {
+        if (e.model_part == model_part && e.mesh == mesh)
+            return true;
+    }
+    return false;
+}
+
+std::uint32_t __stdcall soul_resolve_pc_sub_model_table_slot(const std::uint8_t* actor, std::uint32_t look_word) noexcept
+{
+    if (!engine().enabled())
+        return 7u;
+    const std::uint16_t sub_model_id = static_cast<std::uint16_t>(look_word & 0x0FFFu);
+    std::uint32_t actor_id = 0;
+    if (!safe_read_actor_server_id(actor, actor_id))
+        return 7u;
+    if (engine().authorizes_sub_main_namespace(actor_id, sub_model_id, GetTickCount64())) {
+        engine().increment_hook_hit("pc_sub_model_resolve");
+        return 6u;
+    }
+    return 7u;
+}
+
+__declspec(naked) void thunk_pc_sub_model_resolve()
+{
+    __asm {
+        cmp ebp, 7
+        jne stock
+        pushfd
+        push eax
+        push edx
+        push ebx
+        push edi
+        call soul_resolve_pc_sub_model_table_slot
+        mov ecx, eax
+        pop edx
+        pop eax
+        popfd
+        lea ecx, [ecx + ecx*2]
+        shl ecx, 4
+        jmp dword ptr [g_pc_sub_model_resume]
+    stock:
+        lea ecx, [ebp + ebp*2]
+        shl ecx, 4
+        jmp dword ptr [g_pc_sub_model_resume]
+    }
+}
+
+void __fastcall hook_attach_equip_model(
+    void* actor, void* edx, void* res_handle, std::uint32_t slot_and_model, std::uint32_t actor_gen, std::uint8_t flag)
+{
+    const std::uint32_t slot = (slot_and_model >> 12u) & 0x0Fu;
+    const bool prev_active = g_tls_sub_offhand_attach_active;
+    void* const prev_actor = g_tls_sub_offhand_attach_actor;
+
+    if (engine().enabled() && actor != nullptr && (slot == 6u || slot == 7u)) {
+        std::uint32_t actor_id = 0;
+        const bool have_actor_id = safe_read_actor_server_id(static_cast<const std::uint8_t*>(actor), actor_id);
+        const std::uint64_t now_ms = GetTickCount64();
+
+        // Flintlock (and any appearanceMasks Soul) hides melee Main/Sub weapon models cleanly.
+        if (flag != 0u && have_actor_id && engine().should_hide_weapon_slot(actor_id, slot, now_ms)) {
+            if (slot == 7u)
+                clear_sub_offhand_meshes_for_actor(actor);
+            engine().increment_hook_hit("attach_equip_model");
+            if (g_orig_attach_equip_model != nullptr) {
+                g_orig_attach_equip_model(actor, edx, nullptr, slot_and_model & 0xF000u, actor_gen, 0u);
+            }
+            return;
+        }
+
+        // Berserker Dual-2H Sub-slot offhand bone (0x7F left-hand) attachment registration.
+        if (slot == 7u) {
+            clear_sub_offhand_meshes_for_actor(actor);
+            const std::uint16_t sub_model_id = static_cast<std::uint16_t>(slot_and_model & 0x0FFFu);
+            if (flag != 0u && res_handle != nullptr && have_actor_id &&
+                engine().authorizes_sub_main_namespace(actor_id, sub_model_id, now_ms)) {
+                engine().increment_hook_hit("attach_equip_model");
+                g_tls_sub_offhand_attach_actor = actor;
+                g_tls_sub_offhand_attach_active = true;
+            } else {
+                g_tls_sub_offhand_attach_actor = nullptr;
+                g_tls_sub_offhand_attach_active = false;
+            }
+        }
+    }
+
+    if (g_orig_attach_equip_model != nullptr) {
+        g_orig_attach_equip_model(actor, edx, res_handle, slot_and_model, actor_gen, flag);
+    }
+    g_tls_sub_offhand_attach_active = prev_active;
+    g_tls_sub_offhand_attach_actor = prev_actor;
+}
+
+void* __fastcall hook_model_part_add_mesh(void* model_part, void* edx, void* os2_res)
+{
+    void* mesh = (g_orig_model_part_add_mesh != nullptr)
+        ? g_orig_model_part_add_mesh(model_part, edx, os2_res)
+        : nullptr;
+    if (g_tls_sub_offhand_attach_active && g_tls_sub_offhand_attach_actor != nullptr &&
+        model_part != nullptr && mesh != nullptr) {
+        register_sub_offhand_mesh(g_tls_sub_offhand_attach_actor, model_part, mesh);
+        engine().increment_hook_hit("model_part_add_mesh");
+    }
+    return mesh;
+}
+
+void soul_pre_mesh_draw_swap_impl(void* model_part, void* mesh) noexcept
+{
+    g_tls_saved_main_weapon_bone.active = false;
+    g_tls_saved_main_weapon_bone.target = nullptr;
+    if (!engine().enabled() || g_orig_lookup_bone_index == nullptr)
+        return;
+    if (!is_registered_sub_offhand_mesh(model_part, mesh))
+        return;
+
+    const std::uint32_t idx_main = g_orig_lookup_bone_index(model_part, nullptr, 0x7E) & 0xFFu;
+    const std::uint32_t idx_sub  = g_orig_lookup_bone_index(model_part, nullptr, 0x7F) & 0xFFu;
+    if (idx_main == 0u || idx_sub == 0u || idx_main == idx_sub || idx_main >= 256u || idx_sub >= 256u)
+        return;
+
+    float* matrices = nullptr;
+    std::memcpy(&matrices, reinterpret_cast<const std::uint8_t*>(model_part) + 0x14u, sizeof(matrices));
+    if (matrices == nullptr)
+        return;
+
+    float* main_mat = matrices + (static_cast<std::size_t>(idx_main) * 16u);
+    float* sub_mat  = matrices + (static_cast<std::size_t>(idx_sub) * 16u);
+    std::memcpy(g_tls_saved_main_weapon_bone.saved, main_mat, sizeof(g_tls_saved_main_weapon_bone.saved));
+    std::memcpy(main_mat, sub_mat, sizeof(g_tls_saved_main_weapon_bone.saved));
+    g_tls_saved_main_weapon_bone.target = main_mat;
+    g_tls_saved_main_weapon_bone.active = true;
+    engine().increment_hook_hit("model_mesh_draw");
+}
+
+void __stdcall soul_pre_mesh_draw_swap(void* model_part, void* mesh) noexcept
+{
+    __try {
+        soul_pre_mesh_draw_swap_impl(model_part, mesh);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_tls_saved_main_weapon_bone.active = false;
+        g_tls_saved_main_weapon_bone.target = nullptr;
+    }
+}
+
+void __stdcall soul_post_mesh_draw_restore() noexcept
+{
+    if (g_tls_saved_main_weapon_bone.active && g_tls_saved_main_weapon_bone.target != nullptr) {
+        std::memcpy(g_tls_saved_main_weapon_bone.target, g_tls_saved_main_weapon_bone.saved,
+                    sizeof(g_tls_saved_main_weapon_bone.saved));
+    }
+    g_tls_saved_main_weapon_bone.active = false;
+    g_tls_saved_main_weapon_bone.target = nullptr;
+}
+
+__declspec(naked) void thunk_model_mesh_draw()
+{
+    __asm {
+        push eax
+        push ecx
+        push edx
+        mov edx, dword ptr [esp + 0x30]
+        push ecx
+        push edx
+        call soul_pre_mesh_draw_swap
+        pop edx
+        pop ecx
+        pop eax
+        mov edx, dword ptr [esp + 0x24]
+        push ebp
+        push edx
+        mov edx, dword ptr [esp + 0x34]
+        push ebx
+        push edx
+        call dword ptr [eax + 0x1c]
+        push eax
+        push ecx
+        push edx
+        call soul_post_mesh_draw_restore
+        pop edx
+        pop ecx
+        pop eax
+        jmp dword ptr [g_model_mesh_draw_resume]
+    }
+}
+
 // Finds a pattern starting strictly AFTER `after` inside FFXiMain.dll (for disambiguating twin sites).
 std::uintptr_t scan_in_module(HMODULE mod, const char* pattern, std::uintptr_t after = 0)
 {
@@ -1190,6 +1694,117 @@ void install_if_ready()
         caps |= kCapCommandsMenuEntry;
     }
 
+    // Phase D weapon equipment & 3D presentation hooks (#22, #25-#27, #32-#35).
+    g_item_res_mgr_slot = reinterpret_cast<void**>(base + 0x6229C0u);
+    const std::uintptr_t get_inv_at = scan::find(ffxi, kPatGetInventoryItem);
+    const std::uintptr_t get_res_at = scan::find(ffxi, kPatGetItemResource);
+    g_orig_get_inv_item = reinterpret_cast<GetInventoryItemFn>(get_inv_at != 0 ? get_inv_at : (base + 0x0EB5D0u));
+    g_orig_get_item_res = reinterpret_cast<GetItemResourceFn>(get_res_at != 0 ? get_res_at : (base + 0x15D210u));
+    g_orig_lookup_bone_index = reinterpret_cast<LookupBoneIndexFn>(base + 0x02A9B0u);
+
+    const bool w_can_equip = install_call("can_equip_in_slot", "weapons", scan::find(ffxi, kPatCanEquipInSlot),
+                                          g_can_equip_in_slot_patch, reinterpret_cast<void*>(&hook_can_equip_in_slot),
+                                          0u, g_orig_can_equip_in_slot);
+
+    auto install_jump = [&](const char* id, const char* group, const char* pat, void* repl,
+                            std::uintptr_t& out_at) {
+        HookStatus st{};
+        st.id = id;
+        st.group = group;
+        st.owner = "soulspire";
+        st.disposition = "migrated";
+        out_at = scan::find(ffxi, pat);
+        if (out_at != 0) {
+            st.rva = static_cast<std::uint32_t>(out_at - base);
+            if (imports::jump(reinterpret_cast<void*>(out_at), repl)) {
+                st.installed = true;
+                st.detail = "prologue jump installed (5B)";
+            } else {
+                st.detail = "jump patch failed";
+            }
+        } else {
+            st.detail = "signature not found";
+        }
+        const bool ok = st.installed;
+        statuses.push_back(std::move(st));
+        return ok;
+    };
+
+    std::uintptr_t sub_weap_at = scan::find(ffxi, kPatSubWeaponEquip);
+    if (sub_weap_at != 0) {
+        g_sub_weapon_deny_resume  = sub_weap_at + 5u;
+        g_sub_weapon_allow_resume = sub_weap_at + 0x0Fu;
+    }
+    const bool w_sub_equip = install_jump("sub_weapon_equip", "weapons", kPatSubWeaponEquip,
+                                          reinterpret_cast<void*>(&thunk_sub_weapon_equip), sub_weap_at);
+
+    std::uintptr_t sub_menu_at = scan::find(ffxi, kPatSubMenuFilter);
+    if (sub_menu_at != 0) {
+        g_sub_menu_allow_resume = sub_menu_at + 5u;
+        g_sub_menu_skip_resume  = sub_menu_at + 0x64u;
+    }
+    const bool w_sub_menu = install_jump("sub_menu_filter", "weapons", kPatSubMenuFilter,
+                                         reinterpret_cast<void*>(&thunk_sub_menu_filter), sub_menu_at);
+
+    std::uintptr_t sub_2h_at = scan::find(ffxi, kPatSub2HMainEquip);
+    if (sub_2h_at != 0) {
+        g_sub_2h_main_deny_resume  = sub_2h_at + 5u;
+        g_sub_2h_main_allow_resume = sub_2h_at + 0x32u;
+    }
+    const bool w_sub_2h = install_jump("sub_2h_main_equip", "weapons", kPatSub2HMainEquip,
+                                       reinterpret_cast<void*>(&thunk_sub_2h_main_equip), sub_2h_at);
+
+    if (w_sub_equip)
+        caps |= kCapSubWeaponRules;
+    if (w_can_equip && w_sub_equip && w_sub_menu && w_sub_2h)
+        caps |= kCapSub2HRules;
+
+    std::uintptr_t pc_sub_at = scan::find(ffxi, kPatPcSubModelResolve);
+    if (pc_sub_at != 0)
+        g_pc_sub_model_resume = pc_sub_at + 7u;
+    const bool w_pc_sub = install_jump("pc_sub_model_resolve", "weapons", kPatPcSubModelResolve,
+                                       reinterpret_cast<void*>(&thunk_pc_sub_model_resolve), pc_sub_at);
+    if (w_pc_sub)
+        caps |= kCapWeaponModelResolve;
+
+    clear_all_sub_offhand_meshes();
+    bool w_attach = false;
+    const std::uintptr_t attach_at = scan::find(ffxi, kPatAttachEquipModel);
+    {
+        HookStatus st{};
+        st.id = "attach_equip_model";
+        st.group = "weapons";
+        st.owner = "soulspire";
+        st.disposition = "migrated";
+        if (attach_at != 0) {
+            st.rva = static_cast<std::uint32_t>(attach_at - base);
+            if (imports::detour<AttachEquipModelFn>(reinterpret_cast<AttachEquipModelFn>(attach_at), 5,
+                                                    &hook_attach_equip_model, g_orig_attach_equip_model)) {
+                st.installed = true;
+                st.detail = "detour installed (5B)";
+                w_attach = true;
+            } else {
+                st.detail = "detour install failed";
+            }
+        } else {
+            st.detail = "signature not found";
+        }
+        statuses.push_back(std::move(st));
+    }
+
+    const bool w_add_mesh = install_call("model_part_add_mesh", "weapons", scan::find(ffxi, kPatModelPartAddMesh),
+                                         g_model_part_add_mesh_patch, reinterpret_cast<void*>(&hook_model_part_add_mesh),
+                                         0u, g_orig_model_part_add_mesh);
+
+    std::uintptr_t mesh_draw_at = scan::find(ffxi, kPatModelMeshDraw);
+    if (mesh_draw_at != 0)
+        g_model_mesh_draw_resume = mesh_draw_at + 15u;
+    const bool w_mesh_draw = install_jump("model_mesh_draw", "weapons", kPatModelMeshDraw,
+                                          reinterpret_cast<void*>(&thunk_model_mesh_draw), mesh_draw_at);
+
+    if (w_attach && w_add_mesh && w_mesh_draw)
+        caps |= kCapWeaponOffhandBone;
+
     std::uint32_t ok_count = 0;
     for (const auto& h : statuses) {
         if (h.installed)
@@ -1222,6 +1837,9 @@ void uninstall()
     g_menuwind_restore_cached_patch.uninstall();
     g_menuwind_restore_fresh_patch.uninstall();
     g_menuwind_next_button_patch.uninstall();
+    g_can_equip_in_slot_patch.uninstall();
+    g_model_part_add_mesh_patch.uninstall();
+    clear_all_sub_offhand_meshes();
 }
 
 } // namespace vanacore::soulspire::hooks
