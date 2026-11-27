@@ -32,7 +32,12 @@ std::string_view extract_0x017_message(const std::uint8_t* data, std::size_t len
 
 bool is_internal_transport_prefix(std::string_view msg) noexcept
 {
-    return msg.starts_with("[OXHUD]|") ||
+    return msg.starts_with("[SSHUD]|") ||
+           msg.starts_with("[SSMOB]|") ||
+           msg.starts_with("[SSTAL]|") ||
+           msg.starts_with("[SSBST]|") ||
+           // Temporary BRAND-001 Phase 2 dual-protocol fallback (remove after server cutover + rollback window)
+           msg.starts_with("[OXHUD]|") ||
            msg.starts_with("[OXMOB]|") ||
            msg.starts_with("[OXTAL]|") ||
            msg.starts_with("[OXBST]|");
@@ -92,12 +97,12 @@ void on_incoming(EngineState& st, std::uint16_t id, const std::uint8_t* data, st
         return;
     }
 
-    // 0x1FC (Soulspire HUD Identity / OXSI peer identity).
+    // 0x1FC (Soulspire HUD Identity SSHD / SSSI peer identity; temporary OXHD/OXSI compat).
     if (id == 0x1FC && length >= 12) {
         st.note_packet_1fc();
         st.increment_hook_hit("packet_lifecycle");
-        if (length >= 16 && std::memcmp(data + 4, "OXHD", 4) == 0) {
-            // Authoritative binary OXHD frame:
+        if (length >= 16 && (std::memcmp(data + 4, "SSHD", 4) == 0 || std::memcmp(data + 4, "OXHD", 4) == 0)) {
+            // Authoritative binary SSHD frame (4-byte magic; OXHD temporary compat):
             // [8]=ver(1), [9]=unlocked(0/1), [10]=job_id, [11]=key_len, [12..13]=kv_len, [16..]=soul_key
             const std::uint8_t ver = data[8];
             const bool unlocked = data[9] == 1;
@@ -111,8 +116,9 @@ void on_incoming(EngineState& st, std::uint16_t id, const std::uint8_t* data, st
                     st.set_active_soul(0, resolved_job, resolved_branch, 0, resolved_branch > 0, "packet_1fc", now_ms);
                 }
             }
-        } else if (length >= 16 && std::memcmp(data + 4, "OXSI", 4) == 0) {
-            // Peer OXSI frame: [4..7]="OXSI", [8]=version(1), [9]=job, [10]=branch, [11]=effective_level, [12..15]=actor_id
+        } else if (length >= 16 && (std::memcmp(data + 4, "SSSI", 4) == 0 || std::memcmp(data + 4, "OXSI", 4) == 0)) {
+            // Peer SSSI frame (4-byte magic; OXSI temporary compat):
+            // [4..7]="SSSI", [8]=version(1), [9]=job, [10]=branch, [11]=effective_level, [12..15]=actor_id
             const std::uint8_t ver = data[8];
             const std::uint8_t job = data[9];
             const std::uint8_t branch = data[10];
@@ -125,30 +131,30 @@ void on_incoming(EngineState& st, std::uint16_t id, const std::uint8_t* data, st
         return;
     }
 
-    // 0x1FD (Soulforge OXTL).
-    if (id == 0x1FD && length >= 8 && std::memcmp(data + 4, "OXTL", 4) == 0) {
+    // 0x1FD (Soulforge SSTL; temporary OXTL compat).
+    if (id == 0x1FD && length >= 8 && (std::memcmp(data + 4, "SSTL", 4) == 0 || std::memcmp(data + 4, "OXTL", 4) == 0)) {
         st.note_packet_1fd();
         st.increment_hook_hit("packet_lifecycle");
         return;
     }
 
-    // 0x1FE (Mob Status OXKE).
-    if (id == 0x1FE && length >= 8 && std::memcmp(data + 4, "OXKE", 4) == 0) {
+    // 0x1FE (Mob Status SSKE; temporary OXKE compat).
+    if (id == 0x1FE && length >= 8 && (std::memcmp(data + 4, "SSKE", 4) == 0 || std::memcmp(data + 4, "OXKE", 4) == 0)) {
         st.note_packet_1fe();
         st.increment_hook_hit("packet_lifecycle");
         return;
     }
 
-    // 0x017 (Silent Soulspire transport frames inside chat packets).
+    // 0x017 (Silent Soulspire transport frames inside chat packets; temporary [OX*] compat).
     if (id == 0x017 && length >= 25) {
         const std::string_view msg = extract_0x017_message(data, length);
-        if (msg.starts_with("[OXHUD]|")) {
+        if (msg.starts_with("[SSHUD]|") || msg.starts_with("[OXHUD]|")) {
             st.observe_oxhud_frame(msg.substr(8), now_ms);
-        } else if (msg.starts_with("[OXBST]|")) {
+        } else if (msg.starts_with("[SSBST]|") || msg.starts_with("[OXBST]|")) {
             st.observe_oxbst_frame(msg.substr(8), now_ms);
-        } else if (msg.starts_with("[OXMOB]|")) {
+        } else if (msg.starts_with("[SSMOB]|") || msg.starts_with("[OXMOB]|")) {
             st.observe_oxmob_frame(msg.substr(8), now_ms);
-        } else if (msg.starts_with("[OXTAL]|")) {
+        } else if (msg.starts_with("[SSTAL]|") || msg.starts_with("[OXTAL]|")) {
             st.note_oxtal_frame();
         }
     }

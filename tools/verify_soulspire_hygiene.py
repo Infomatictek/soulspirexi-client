@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
+
+LEGACY_NAMESPACE_RE = re.compile(r"\b(overlords?xi|overlords|overlords_[a-z0-9_]+|ox_combat_session)\b", re.IGNORECASE)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -142,6 +145,21 @@ def main() -> int:
             errors.append(f"Replacement SoulspireXI branding asset missing or empty: {rel}")
         elif rel.endswith(".png") and p.stat().st_size > 500_000:
             errors.append(f"Suspiciously large PNG ({p.stat().st_size}B) at {rel} — verify Vekien logo was replaced")
+
+    # BRAND-001 / DEC-033 permanent SoulspireXI namespace hygiene across Soulspire-owned client sources
+    for scan_dir in ("src/core/soulspire", "src/launcher"):
+        base = ROOT / scan_dir
+        if not base.is_dir():
+            continue
+        for p in sorted(base.rglob("*")):
+            if not p.is_file() or p.suffix.lower() not in (".h", ".hpp", ".c", ".cpp", ".ini", ".txt"):
+                continue
+            txt = p.read_text(encoding="utf-8", errors="replace")
+            hits = sorted({m.group(0) for m in LEGACY_NAMESPACE_RE.finditer(txt)})
+            if hits:
+                errors.append(
+                    f"BRAND-001 legacy namespace identifier(s) {', '.join(hits)} found in {p.relative_to(ROOT).as_posix()}"
+                )
 
     if args.package_dir is not None:
         pkg = args.package_dir

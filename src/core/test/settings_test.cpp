@@ -612,16 +612,64 @@ int main()
         const auto p_tal = build_017("[OXTAL]|META|NIN|75|5|0|5|9|0|Shinobi");
         packets::on_incoming(st, 0x017, p_tal.data(), p_tal.size(), 327);
         check(packets::should_suppress_for_game(st, 0x017, p_tal.data(), p_tal.size()), "[OXTAL]| suppressed from chat");
+
+        // 6c. BRAND-001 canonical Soulspire protocol frames (SSHD, SSSI, SSTL, SSKE, [SSHUD]|, [SSMOB]|, [SSTAL]|, [SSBST]|)
+        {
+            std::vector<std::uint8_t> pkt_sshd(16 + 9, 0);
+            std::memcpy(pkt_sshd.data() + 4, "SSHD", 4);
+            pkt_sshd[8] = 1;
+            pkt_sshd[9] = 1;
+            pkt_sshd[10] = 1;
+            pkt_sshd[11] = 9;
+            std::memcpy(pkt_sshd.data() + 16, "berserker", 9);
+            packets::on_incoming(st, 0x1FC, pkt_sshd.data(), pkt_sshd.size(), 328);
+            const ActiveSoul after_sshd = st.active_soul();
+            check(after_sshd.known && after_sshd.job == 1 && after_sshd.branch == 2,
+                  "canonical 0x1FC SSHD decodes berserker -> WAR branch 2");
+
+            std::uint8_t pkt_sssi[16]{};
+            std::memcpy(pkt_sssi + 4, "SSSI", 4);
+            pkt_sssi[8] = 1;
+            pkt_sssi[9] = 1;
+            pkt_sssi[10] = 2;
+            pkt_sssi[11] = 75;
+            const std::uint32_t peer2 = 999002u;
+            std::memcpy(pkt_sssi + 12, &peer2, 4);
+            packets::on_incoming(st, 0x1FC, pkt_sssi, sizeof(pkt_sssi), 329);
+            check(st.authorizes_sub_main_namespace(peer2, 0x0120u, 330),
+                  "canonical 0x1FC SSSI authorizes peer Berserker remap");
+
+            std::uint8_t pkt_sstl[12]{};
+            std::memcpy(pkt_sstl + 4, "SSTL", 4);
+            packets::on_incoming(st, 0x1FD, pkt_sstl, sizeof(pkt_sstl), 331);
+            std::uint8_t pkt_sske[12]{};
+            std::memcpy(pkt_sske + 4, "SSKE", 4);
+            packets::on_incoming(st, 0x1FE, pkt_sske, sizeof(pkt_sske), 332);
+
+            const auto p_sshud = build_017("[SSHUD]|shinobi|sh=2|shmax=3");
+            const auto p_ssmob = build_017("[SSMOB]|17199453|1|1|");
+            const auto p_sstal = build_017("[SSTAL]|META|WAR|75|5|0|5|6|0|Berserker");
+            const auto p_ssbst = build_017("[SSBST]|1|3|5|30");
+            packets::on_incoming(st, 0x017, p_sshud.data(), p_sshud.size(), 333);
+            packets::on_incoming(st, 0x017, p_ssmob.data(), p_ssmob.size(), 334);
+            packets::on_incoming(st, 0x017, p_sstal.data(), p_sstal.size(), 335);
+            packets::on_incoming(st, 0x017, p_ssbst.data(), p_ssbst.size(), 336);
+            check(packets::should_suppress_for_game(st, 0x017, p_sshud.data(), p_sshud.size()) &&
+                      packets::should_suppress_for_game(st, 0x017, p_ssmob.data(), p_ssmob.size()) &&
+                      packets::should_suppress_for_game(st, 0x017, p_sstal.data(), p_sstal.size()) &&
+                      packets::should_suppress_for_game(st, 0x017, p_ssbst.data(), p_ssbst.size()),
+                  "canonical [SSHUD]/[SSMOB]/[SSTAL]/[SSBST] frames are all suppressed from stock FFXI chat");
+        }
         st.set_hook_statuses({
             {"packet_lifecycle", "packets", "vanacore_shared", "replaced", 0, true, 1, "ok"},
             {"ability_list_filter", "visibility", "soulspire", "migrated", 0x22562Fu, true, 2, "installed"},
         }, kCapVanaCoreNative | kCapAbilityVisibility);
         const DiagnosticsSnapshot diag = st.diagnostics();
-        check(diag.packets_1fd == 1 && diag.packets_1fe == 1 && diag.packets_oxtal == 1 &&
+        check(diag.packets_1fd == 2 && diag.packets_1fe == 2 && diag.packets_oxtal == 2 &&
               diag.hooks_installed == 2 && diag.hooks_total == 2 &&
               diag.hooks[1].disposition == "migrated" && (diag.capabilities & kCapAbilityVisibility) != 0 &&
-              st.all_mob_statuses().size() == 1,
-              "Phase B.2 diagnostics report packet counts, Hook #20 capability, disposition, and mob statuses");
+              st.all_mob_statuses().size() == 2,
+              "Phase B.2 + BRAND-001 diagnostics report canonical and compat packet counts, Hook #20 capability, and mob statuses");
 
         // 6c. Native Commands menu (Status -> Soulspire -> Equipment) & open_core queue
         st.request_open_core();

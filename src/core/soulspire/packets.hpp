@@ -12,7 +12,8 @@ class EngineState;
 namespace packets {
 
 // Observes an incoming server packet before/alongside addon dispatch.
-// Decodes 0x1FF (CRYS), 0x1FC (OXSI/OXHD), 0x1FD (OXTL), 0x1FE (OXKE), 0x017 ([OXHUD]|[OXMOB]|[OXTAL]|[OXBST]),
+// Decodes 0x1FF (CRYS), 0x1FC (SSSI/SSHD; legacy OXSI/OXHD compat), 0x1FD (SSTL; legacy OXTL),
+// 0x1FE (SSKE; legacy OXKE), 0x017 ([SSHUD]|[SSMOB]|[SSTAL]|[SSBST]; legacy [OX*] compat),
 // 0x061 (job/level), and 0x00A/0x00B (zone transition hygiene).
 void on_incoming(EngineState& st, std::uint16_t id, const std::uint8_t* data, std::size_t length, std::uint64_t now_ms);
 

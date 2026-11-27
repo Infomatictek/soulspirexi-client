@@ -21,9 +21,10 @@ Before making changes, recover full cross-repository project context from the Pr
 
 ## Non-Negotiable Rules
 
-1. **Licensing & Branding Hygiene (GPL-3.0-or-later + Section 7 Term 4):**
+1. **Licensing & Branding Hygiene (GPL-3.0-or-later + Section 7 Term 4 + `BRAND-001` / `DEC-033`):**
    - Run `python3 tools/verify_soulspire_hygiene.py` before every push.
    - Never restore upstream CatsEyeXI branding, proprietary Vekien artwork, `server.catseyexi.com`, CatsEyeXI Discord IDs, or `dlss/nvngx_dlssnr.dll`.
+   - SoulspireXI (`SOULSPIRE_*`, `soulspire_*`, `SS*` packet headers) is the sole permanent project namespace (`DEC-033`). Never introduce or extend deprecated `OverlordsXI`, `Overlords`, `OVERLORDS_*`, or new project-specific `OX_*` identifiers.
 2. **Credential Security:**
    - Never accept plaintext passwords on the command line (`--password` / `--pass` must remain refused); authenticate via `--password-stdin` and scrub buffers with `SecureZeroMemory`.
    - Never log credentials, session hashes, or tokens.
