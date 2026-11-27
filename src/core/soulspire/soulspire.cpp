@@ -101,6 +101,23 @@ bool reload_registries()
             log::write(L"Soulspire: failed to parse %ls", used.c_str());
         }
     }
+
+    const std::vector<std::wstring> companion_paths = {
+        g_install_dir + L"\\addons\\soulspire_core\\data\\soul-companions.json",
+        g_install_dir + L"\\addons\\vanacore\\soulspire_core\\data\\soul-companions.json",
+        g_install_dir + L"\\data\\soul-companions.json",
+    };
+    json.clear();
+    used.clear();
+    if (load_first_existing(companion_paths, json, used)) {
+        if (engine().load_companions_json(json)) {
+            log::write(L"Soulspire: loaded %u Soul Companion spells from %ls",
+                       engine().companion_spell_count(), used.c_str());
+            any_loaded = true;
+        } else {
+            log::write(L"Soulspire: failed to parse %ls", used.c_str());
+        }
+    }
     return any_loaded;
 }
 

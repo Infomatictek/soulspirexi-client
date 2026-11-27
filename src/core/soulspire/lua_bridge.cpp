@@ -484,6 +484,19 @@ int l_ashita_compat_enabled(lua_State* L)
     return 1;
 }
 
+int l_companions_enabled(lua_State* L)
+{
+    lua_pushboolean(L, engine().companions_enabled() ? 1 : 0);
+    return 1;
+}
+
+int l_companion_category_label(lua_State* L)
+{
+    const std::string label = engine().companion_category_label();
+    lua_pushlstring(L, label.data(), label.size());
+    return 1;
+}
+
 int l_diagnostics(lua_State* L)
 {
     const DiagnosticsSnapshot d = engine().diagnostics();
@@ -518,6 +531,10 @@ int l_diagnostics(lua_State* L)
     lua_pushboolean(L, uis.active ? 1 : 0); lua_setfield(L, -2, "ui_input_active");
     lua_pushinteger(L, static_cast<lua_Integer>(uis.owner_count)); lua_setfield(L, -2, "ui_input_owner_count");
     lua_pushboolean(L, addons::ashita_enabled() ? 1 : 0); lua_setfield(L, -2, "ashita_compat_enabled");
+    lua_pushboolean(L, engine().companions_enabled() ? 1 : 0); lua_setfield(L, -2, "companions_enabled");
+    lua_pushinteger(L, static_cast<lua_Integer>(engine().companion_spell_count())); lua_setfield(L, -2, "companion_spell_count");
+    const std::string cmp_cat = engine().companion_category_label();
+    lua_pushlstring(L, cmp_cat.data(), cmp_cat.size()); lua_setfield(L, -2, "companion_category_label");
 
     lua_newtable(L);
     for (std::size_t i = 0; i < d.hooks.size(); ++i) {
@@ -569,8 +586,10 @@ void push(lua_State* L)
     set_fn(L, "acquire_ui_input",      &l_acquire_ui_input);
     set_fn(L, "release_ui_input",      &l_release_ui_input);
     set_fn(L, "ui_input_state",        &l_ui_input_state);
-    set_fn(L, "ashita_compat_enabled", &l_ashita_compat_enabled);
-    set_fn(L, "diagnostics",           &l_diagnostics);
+    set_fn(L, "ashita_compat_enabled",    &l_ashita_compat_enabled);
+    set_fn(L, "companions_enabled",       &l_companions_enabled);
+    set_fn(L, "companion_category_label", &l_companion_category_label);
+    set_fn(L, "diagnostics",              &l_diagnostics);
 }
 
 } // namespace vanacore::soulspire::lua_bridge

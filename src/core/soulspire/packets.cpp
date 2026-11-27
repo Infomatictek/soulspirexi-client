@@ -35,7 +35,8 @@ bool is_internal_transport_prefix(std::string_view msg) noexcept
     return msg.starts_with("[OXHUD]|") ||
            msg.starts_with("[OXMOB]|") ||
            msg.starts_with("[OXTAL]|") ||
-           msg.starts_with("[OXBST]|");
+           msg.starts_with("[OXBST]|") ||
+           msg.starts_with("[SSCMP]|");
 }
 
 } // namespace
@@ -150,6 +151,8 @@ void on_incoming(EngineState& st, std::uint16_t id, const std::uint8_t* data, st
             st.observe_oxmob_frame(msg.substr(8), now_ms);
         } else if (msg.starts_with("[OXTAL]|")) {
             st.note_oxtal_frame();
+        } else if (msg.starts_with("[SSCMP]|")) {
+            st.observe_sscmp_frame(msg.substr(8));
         }
     }
 }
