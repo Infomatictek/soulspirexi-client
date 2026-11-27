@@ -745,6 +745,7 @@ int main()
               "GameStart return after Direct3DCreate8 classifies as CleanExit (exit 0)");
 
         // PLAYER-CMD-001: Verify [mcp] available and [developer] enabled default to 0 (fail-closed)
+        CreateDirectoryW(base.c_str(), nullptr);
         const std::wstring default_ini = base + L"\\player_default.ini";
         write_utf16(default_ini, L"[server]\r\nserver=play.soulspirexi.com\r\n");
         check(GetPrivateProfileIntW(L"mcp", L"available", 0, default_ini.c_str()) == 0,
@@ -757,6 +758,9 @@ int main()
               "MCP [mcp] available honors explicit available=1 opt-in");
         check(GetPrivateProfileIntW(L"developer", L"enabled", 0, optin_ini.c_str()) == 1,
               "Developer [developer] enabled honors explicit enabled=1 opt-in");
+        DeleteFileW(default_ini.c_str());
+        DeleteFileW(optin_ini.c_str());
+        RemoveDirectoryW(base.c_str());
     }
 
     printf("\n%s (%d failed)\n", g_failed == 0 ? "PASS" : "FAIL", g_failed);
