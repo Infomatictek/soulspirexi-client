@@ -566,7 +566,36 @@ int main()
         check(!packets::should_suppress_for_game(st, 0x017, p_normal.data(), p_normal.size()),
               "ordinary player chat is NEVER suppressed");
 
-        // 6b. 0x1FC OXHD, 0x1FD OXTL, 0x1FE OXKE, [OXTAL]|, [OXBST]| & HookStatus disposition diagnostics
+        // 6b. 0x1FC OXHD (binary unlocked/job/soul_key), 64-byte 0x1FF CRYS, 0x1FD OXTL, 0x1FE OXKE
+        {
+            std::vector<std::uint8_t> pkt_oxhd(16 + 9, 0);
+            std::memcpy(pkt_oxhd.data() + 4, "OXHD", 4);
+            pkt_oxhd[8] = 1;  // ver
+            pkt_oxhd[9] = 1;  // unlocked=true (must NOT be misread as job=1)
+            pkt_oxhd[10] = 1; // job_id=1 WAR (must NOT be misread as branch=1 Commander!)
+            pkt_oxhd[11] = 9; // key_len="berserker"
+            std::memcpy(pkt_oxhd.data() + 16, "berserker", 9);
+            packets::on_incoming(st, 0x1FC, pkt_oxhd.data(), pkt_oxhd.size(), 322);
+            const ActiveSoul after_oxhd = st.active_soul();
+            check(after_oxhd.known && after_oxhd.job == 1 && after_oxhd.branch == 2,
+                  "binary 0x1FC OXHD decodes berserker -> WAR branch 2 (not Commander branch 1)");
+
+            std::uint8_t pkt_crys64[64]{};
+            pkt_crys64[0] = 0xFF; pkt_crys64[1] = 0x21;
+            std::memcpy(pkt_crys64 + 4, "CRYS", 4);
+            pkt_crys64[8] = 1;  // ver
+            pkt_crys64[9] = 0;  // result=ok
+            pkt_crys64[10] = 0x01; pkt_crys64[11] = 0x40; // request_id=0x4001
+            pkt_crys64[12] = 1; // WAR
+            pkt_crys64[13] = 24;
+            pkt_crys64[14] = 75;
+            pkt_crys64[16 + 1 * 2] = 0x0E; // owned_mask
+            pkt_crys64[16 + 1 * 2 + 1] = 2; // active=Berserker
+            packets::on_incoming(st, 0x1FF, pkt_crys64, sizeof(pkt_crys64), 323);
+            const ActiveSoul after_crys64 = st.active_soul();
+            check(after_crys64.known && after_crys64.job == 1 && after_crys64.branch == 2 && after_crys64.effective_level == 75,
+                  "64-byte 0x1FF CRYS decodes WAR Lv.75 Berserker cleanly");
+        }
         std::uint8_t pkt_1fd[12]{};
         std::memcpy(pkt_1fd + 4, "OXTL", 4);
         packets::on_incoming(st, 0x1FD, pkt_1fd, sizeof(pkt_1fd), 325);

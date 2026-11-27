@@ -65,13 +65,29 @@ void on_incoming(EngineState& st, std::uint16_t id, const std::uint8_t* data, st
     // 0x1FF (CrystalSocket / Soulspire Identity packet: "CRYS" at +4..+7).
     if (id == 0x1FF && length >= 16 && std::memcmp(data + 4, "CRYS", 4) == 0) {
         st.note_packet_1ff();
-        // Payload format: [4..7]="CRYS", [8]=version(1), [9]=op, [10]=job, [11]=branch, [12..15]=char_id
+        st.increment_hook_hit("packet_lifecycle");
         const std::uint8_t ver = data[8];
-        const std::uint8_t job = data[10];
-        const std::uint8_t branch = data[11];
-        const std::uint32_t char_id = read_u32_le(data + 12);
-        if (ver == 1 && job >= 1 && job <= 22 && branch <= 3) {
-            st.set_active_soul(char_id, job, branch, 0, branch > 0, "packet_1ff", now_ms);
+        if (ver == 1 && length >= 64 && data[13] == 24) {
+            // Authoritative 64-byte GP_SERV_COMMAND_CRYSTAL_COLLECTION reply:
+            // [8]=ver(1), [9]=result, [10..11]=requestId, [12]=job, [13]=entryCount(24), [14]=level,
+            // [16 + job*2]=ownedMask, [16 + job*2 + 1]=activeBranch
+            const std::uint8_t result = data[9];
+            const std::uint8_t job = data[12];
+            const std::uint8_t level = data[14];
+            if (result == 0 && job >= 1 && job <= 22) {
+                const std::uint8_t branch = data[16 + static_cast<std::size_t>(job) * 2u + 1u];
+                if (branch <= 3) {
+                    st.set_active_soul(0, job, branch, level, branch > 0, "packet_1ff", now_ms);
+                }
+            }
+        } else if (ver == 1 && length == 16) {
+            // Compact 16-byte CRYS identity frame (unit/synthetic harness): [10]=job, [11]=branch, [12..15]=char_id
+            const std::uint8_t job = data[10];
+            const std::uint8_t branch = data[11];
+            const std::uint32_t char_id = read_u32_le(data + 12);
+            if (job >= 1 && job <= 22 && branch <= 3) {
+                st.set_active_soul(char_id, job, branch, 0, branch > 0, "packet_1ff", now_ms);
+            }
         }
         return;
     }
@@ -79,13 +95,21 @@ void on_incoming(EngineState& st, std::uint16_t id, const std::uint8_t* data, st
     // 0x1FC (Soulspire HUD Identity / OXSI peer identity).
     if (id == 0x1FC && length >= 12) {
         st.note_packet_1fc();
-        // Self OXHD frame: [4..7]="OXHD", [8]=version(1), [9]=job, [10]=branch, [11]=flags/level
-        if (std::memcmp(data + 4, "OXHD", 4) == 0) {
+        st.increment_hook_hit("packet_lifecycle");
+        if (length >= 16 && std::memcmp(data + 4, "OXHD", 4) == 0) {
+            // Authoritative binary OXHD frame:
+            // [8]=ver(1), [9]=unlocked(0/1), [10]=job_id, [11]=key_len, [12..13]=kv_len, [16..]=soul_key
             const std::uint8_t ver = data[8];
-            const std::uint8_t job = data[9];
-            const std::uint8_t branch = data[10];
-            if (ver == 1 && job >= 1 && job <= 22 && branch <= 3) {
-                st.set_active_soul(0, job, branch, 0, branch > 0, "packet_1fc", now_ms);
+            const bool unlocked = data[9] == 1;
+            const std::uint8_t job_id = data[10];
+            const std::uint8_t key_len = data[11];
+            if (ver == 1 && unlocked && job_id >= 1 && job_id <= 22 && key_len > 0 &&
+                static_cast<std::size_t>(16u + key_len) <= length) {
+                const std::string_view key(reinterpret_cast<const char*>(data + 16), key_len);
+                std::uint8_t resolved_job = 0, resolved_branch = 0;
+                if (st.soul_key_to_pair(key, resolved_job, resolved_branch) && resolved_job == job_id) {
+                    st.set_active_soul(0, resolved_job, resolved_branch, 0, resolved_branch > 0, "packet_1fc", now_ms);
+                }
             }
         } else if (length >= 16 && std::memcmp(data + 4, "OXSI", 4) == 0) {
             // Peer OXSI frame: [4..7]="OXSI", [8]=version(1), [9]=job, [10]=branch, [11]=effective_level, [12..15]=actor_id
@@ -104,12 +128,14 @@ void on_incoming(EngineState& st, std::uint16_t id, const std::uint8_t* data, st
     // 0x1FD (Soulforge OXTL).
     if (id == 0x1FD && length >= 8 && std::memcmp(data + 4, "OXTL", 4) == 0) {
         st.note_packet_1fd();
+        st.increment_hook_hit("packet_lifecycle");
         return;
     }
 
     // 0x1FE (Mob Status OXKE).
     if (id == 0x1FE && length >= 8 && std::memcmp(data + 4, "OXKE", 4) == 0) {
         st.note_packet_1fe();
+        st.increment_hook_hit("packet_lifecycle");
         return;
     }
 
