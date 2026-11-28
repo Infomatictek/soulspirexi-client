@@ -156,7 +156,6 @@ CallPatch g_ability_row_patch{};
 CallPatch g_ability_desc_patch{};
 CallPatch g_ability_target_patch{};
 CallPatch g_ability_icon_patch{};
-CallPatch g_magic_filter_call_patch{};
 CallPatch g_ability_filter_call_patch{};
 CallPatch g_menu_spell_elig_patch{};
 CallPatch g_item_job_patch{};
@@ -181,6 +180,8 @@ std::uintptr_t g_orig_set_list_count = 0;
 std::uint8_t** g_ability_list_slot = nullptr;
 std::uintptr_t g_orig_menu_spell_elig = 0;
 std::uintptr_t g_missing_spell_resume = 0;
+std::uintptr_t g_magic_list_blu_check_resume = 0;
+std::uintptr_t g_magic_list_add_row_resume = 0;
 JobLookupFn    g_orig_item_job = nullptr;
 JobLookupFn    g_orig_full_job1 = nullptr;
 JobLookupFn    g_orig_full_job2 = nullptr;
@@ -464,8 +465,33 @@ void sync_dynamic_spell_res_table(const std::uint8_t* observed_spell_res, std::u
         const std::uint16_t dsb_icon_v2 = 240u;
         std::memcpy(entry + 64u, &dsb_icon_v1, sizeof(dsb_icon_v1));
         std::memcpy(entry + 66u, &dsb_icon_v2, sizeof(dsb_icon_v2));
+        // Clear BLU-inherited requirements/range/AoE/cursor fields (SOUL-ACTION-002):
+        // Self spells (0x01) use range=0, cursor=0x01; enemy/ally spells use range=12 (20y), cursor=0x0D/0x00.
+        entry[68] = 0u;
+        entry[69] = (sp.client_valid_targets == 0x01u) ? 0u : 12u;
+        entry[70] = 0u;
+        entry[71] = 0u;
+        entry[72] = (sp.client_valid_targets == 0x01u)
+            ? 0x01u
+            : ((sp.client_valid_targets & 0x20u) != 0u ? 0x0Du : 0x00u);
     }
     g_spell_res_applied_gen = gen;
+}
+
+// SOUL-ACTION-002: Consolidates magic_list_filter (0x22DAB9 -> 0x22DAC9: `cmp esi, 0x200; jl +0x64`).
+// Retail Magic::Populate gates all spell IDs >= 512 through Blue Magic set-spell checks even when
+// CanShowSpell (0x22CDE0) returns 1 and spell_res->Type is Black Magic. For active non-BLU dynamic
+// spells (e.g. Necromancy 715..749), jump directly to the add-row path (0x22DB35); all vanilla BLU
+// and Trust spells (>= 512) fall through to the exact unmodified retail check at 0x22DAD1.
+std::uint8_t __stdcall should_bypass_magic_list_blu_check(std::uint32_t spell_id) noexcept
+{
+    if (spell_id < 0x200u)
+        return 1;
+    if (spell_id <= 1023u && engine().is_dynamic_non_blu_spell_allowed(static_cast<std::uint16_t>(spell_id))) {
+        engine().increment_hook_hit("magic_list_filter");
+        return 1;
+    }
+    return 0;
 }
 
 std::uint8_t __cdecl hook_magic_filter(const std::uint8_t* spell_res)
@@ -743,6 +769,25 @@ __declspec(naked) void thunk_ability_target()
     stock:
         popad
         jmp dword ptr [g_orig_ability_target]
+    }
+}
+
+__declspec(naked) void thunk_magic_list_blu_bypass()
+{
+    __asm {
+        pushfd
+        pushad
+        push esi
+        call should_bypass_magic_list_blu_check
+        test al, al
+        jnz add_row
+        popad
+        popfd
+        jmp dword ptr [g_magic_list_blu_check_resume]
+    add_row:
+        popad
+        popfd
+        jmp dword ptr [g_magic_list_add_row_resume]
     }
 }
 
@@ -1662,11 +1707,32 @@ void install_if_ready()
         statuses.push_back(std::move(st));
     }
 
-    if (g_orig_can_use_spell != nullptr) {
-        CanShowSpellFn dummy_orig = nullptr;
-        install_call("magic_list_filter", "visibility", scan::find(ffxi, kPatMagicFilterCall),
-                     g_magic_filter_call_patch, reinterpret_cast<void*>(&hook_magic_filter),
-                     kCapMagicVisibility, dummy_orig);
+    // Consolidated magic_list_filter (0x22DAB9 + 0x10 = 0x22DAC9: `81 FE 00 02 00 00 7C 64`).
+    // `can_use_spell` (0x22CDE0) already detours the call at 0x22DAB9; patching 0x22DAC9 lets active
+    // non-BLU dynamic spells on >=512 IDs skip the Blue Magic equipped-slot filter (zero new hooks).
+    {
+        HookStatus st{};
+        st.id = "magic_list_filter";
+        st.group = "visibility";
+        st.owner = "soulspire";
+        st.disposition = "migrated";
+        const std::uintptr_t magic_filter_at = scan::find(ffxi, kPatMagicFilterCall);
+        if (magic_filter_at != 0) {
+            const std::uintptr_t blu_cmp_at = magic_filter_at + 0x10u; // 0x22DAC9: cmp esi, 0x200; jl +0x64
+            st.rva = static_cast<std::uint32_t>(blu_cmp_at - base);
+            g_magic_list_blu_check_resume = magic_filter_at + 0x18u;       // 0x22DAD1 (fallthrough to BLU/Trust check)
+            g_magic_list_add_row_resume   = magic_filter_at + 0x18u + 0x64u; // 0x22DB35 (add row to Magic List)
+            if (imports::jump(reinterpret_cast<void*>(blu_cmp_at), reinterpret_cast<void*>(&thunk_magic_list_blu_bypass))) {
+                st.installed = true;
+                st.detail = "consolidated BLU-range bypass jump installed (5B)";
+                caps |= kCapMagicVisibility;
+            } else {
+                st.detail = "jump patch failed";
+            }
+        } else {
+            st.detail = "signature not found";
+        }
+        statuses.push_back(std::move(st));
     }
 
     // Hook #20 (Phase B.2): Ability/WeaponSkill list filter & compaction.
@@ -1900,7 +1966,6 @@ void uninstall()
     g_ability_desc_patch.uninstall();
     g_ability_target_patch.uninstall();
     g_ability_icon_patch.uninstall();
-    g_magic_filter_call_patch.uninstall();
     g_ability_filter_call_patch.uninstall();
     g_menu_spell_elig_patch.uninstall();
     g_item_job_patch.uninstall();

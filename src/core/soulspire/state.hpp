@@ -292,10 +292,13 @@ public:
     bool load_companions_json(std::string_view json_text);
     bool load_dynamic_spellbooks_json(std::string_view json_text);
 
-    // SOUL-SPELL-001: Universal Dynamic Spellbook live sync & queries.
+    // SOUL-SPELL-001 / SOUL-ACTION-002: Universal Dynamic Spellbook live sync & queries.
     bool observe_ssdsb_frame(std::string_view payload);
     bool dynamic_spellbook_active() const;
+    bool is_dynamic_non_blu_spell_allowed(std::uint16_t spell_id) const;
     std::uint32_t dynamic_spell_count() const;
+    std::string dynamic_spellbook_hash() const;
+    DynamicSpellbookRuntime dynamic_runtime_snapshot() const;
     std::vector<DynamicSpellEntry> all_dynamic_spells() const;
     std::uint32_t dynamic_spellbook_generation() const noexcept {
         return dynamic_spellbook_gen_.load(std::memory_order_acquire);

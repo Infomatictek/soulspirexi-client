@@ -1480,10 +1480,41 @@ bool EngineState::dynamic_spellbook_active() const
     return dynamic_runtime_.active;
 }
 
+bool EngineState::is_dynamic_non_blu_spell_allowed(std::uint16_t spell_id) const
+{
+    std::lock_guard lock(mutex_);
+    if (!dynamic_runtime_.active)
+        return false;
+    const auto dit = dynamic_spells_.find(spell_id);
+    if (dit == dynamic_spells_.end())
+        return false;
+    // Only non-Blue Magic dynamic spells (e.g. Black/White/Dark Magic on repurposed >=512 slots)
+    // bypass FFXiMain's hardcoded `cmp esi, 0x200` Blue Magic set-spell check in Magic::Populate.
+    if (dit->second.client_magic_type == 6u)
+        return false;
+    for (const std::uint16_t allowed_id : dynamic_runtime_.allowed_spells) {
+        if (allowed_id == spell_id)
+            return true;
+    }
+    return false;
+}
+
 std::uint32_t EngineState::dynamic_spell_count() const
 {
     std::lock_guard lock(mutex_);
     return static_cast<std::uint32_t>(dynamic_spells_.size());
+}
+
+std::string EngineState::dynamic_spellbook_hash() const
+{
+    std::lock_guard lock(mutex_);
+    return dynamic_spellbook_hash_;
+}
+
+DynamicSpellbookRuntime EngineState::dynamic_runtime_snapshot() const
+{
+    std::lock_guard lock(mutex_);
+    return dynamic_runtime_;
 }
 
 std::vector<DynamicSpellEntry> EngineState::all_dynamic_spells() const

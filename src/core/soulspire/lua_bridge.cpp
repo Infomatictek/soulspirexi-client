@@ -544,6 +544,34 @@ int l_diagnostics(lua_State* L)
     lua_pushlstring(L, cmp_cat.data(), cmp_cat.size()); lua_setfield(L, -2, "companion_category_label");
     const std::string cmp_sys = engine().companion_system_name();
     lua_pushlstring(L, cmp_sys.data(), cmp_sys.size()); lua_setfield(L, -2, "companion_system_name");
+    lua_pushboolean(L, engine().dynamic_spellbook_active() ? 1 : 0); lua_setfield(L, -2, "dynamic_spellbook_active");
+    lua_pushinteger(L, static_cast<lua_Integer>(engine().dynamic_spell_count())); lua_setfield(L, -2, "dynamic_spell_count");
+    const std::string dsb_hash = engine().dynamic_spellbook_hash();
+    lua_pushlstring(L, dsb_hash.data(), dsb_hash.size()); lua_setfield(L, -2, "dynamic_spellbook_hash");
+    {
+        const DynamicSpellbookRuntime dr = engine().dynamic_runtime_snapshot();
+        lua_newtable(L);
+        lua_pushboolean(L, dr.active ? 1 : 0); lua_setfield(L, -2, "active");
+        lua_pushboolean(L, dr.replace_base ? 1 : 0); lua_setfield(L, -2, "replace_base");
+        lua_pushboolean(L, dr.replace_base_abilities ? 1 : 0); lua_setfield(L, -2, "replace_base_abilities");
+        lua_pushlstring(L, dr.soul_key.data(), dr.soul_key.size()); lua_setfield(L, -2, "soul");
+        lua_pushinteger(L, dr.level); lua_setfield(L, -2, "level");
+        lua_pushlstring(L, dr.pet_type.data(), dr.pet_type.size()); lua_setfield(L, -2, "pet_type");
+        lua_pushboolean(L, dr.pet_alive ? 1 : 0); lua_setfield(L, -2, "pet_alive");
+        lua_newtable(L);
+        for (std::size_t i = 0; i < dr.allowed_spells.size(); ++i) {
+            lua_pushinteger(L, dr.allowed_spells[i]);
+            lua_rawseti(L, -2, static_cast<int>(i + 1));
+        }
+        lua_setfield(L, -2, "allowed_spells");
+        lua_newtable(L);
+        for (std::size_t i = 0; i < dr.allowed_abilities.size(); ++i) {
+            lua_pushinteger(L, dr.allowed_abilities[i]);
+            lua_rawseti(L, -2, static_cast<int>(i + 1));
+        }
+        lua_setfield(L, -2, "allowed_abilities");
+        lua_setfield(L, -2, "dynamic_runtime");
+    }
 
     lua_newtable(L);
     for (std::size_t i = 0; i < d.hooks.size(); ++i) {

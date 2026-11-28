@@ -1079,23 +1079,37 @@ int main()
         check(packets::should_suppress_for_game(st, 0x017, pkt.data(), pkt.size()),
               "[SSDSB]| transport frame is suppressed from game chat");
 
-        // Phase 2: Universal Job & Pet Ability Filtering
+        // Phase 2 + SOUL-ACTION-002: Universal Job & Pet Ability Filtering + Magic List BLU-check bypass
         check(st.observe_ssdsb_frame(
-                  "active=1|soul=necromancer|level=75|replace_base=1|replace_base_abilities=1|pet_type=dullahan|pet_alive=1|allowed=715,723|allowed_abilities=69,70,71,72,73"),
-              "observe_ssdsb_frame parses replace_base_abilities & allowed_abilities");
-        // Universal pet command Fight (server 69 -> client 512+69=581) stays visible
+                  "active=1|soul=necromancer|level=20|subjob=1|sublvl=10|replace_base=1|replace_base_abilities=1|pet_type=dullahan|pet_alive=1|allowed=715,723|allowed_abilities=69,70,71,72,73,35"),
+              "observe_ssdsb_frame parses replace_base_abilities & allowed_abilities incl. subjob Provoke");
+        check(st.is_dynamic_non_blu_spell_allowed(715),
+              "Raise Warrior (715) bypasses >=512 BLU-set check in Magic::Populate when active");
+        check(st.is_dynamic_non_blu_spell_allowed(723),
+              "Grave Cleaver (723) bypasses >=512 BLU-set check while Dullahan active");
+        check(!st.is_dynamic_non_blu_spell_allowed(731),
+              "Corse Soul Rend (731) does NOT bypass >=512 BLU-set check while Dullahan active");
+        check(!st.is_dynamic_non_blu_spell_allowed(144),
+              "traditional BLM Fire (144) is not a dynamic non-BLU spell");
+        // Universal pet command Fight (server 69 -> client 512+69=581) and subjob WAR Provoke (35 -> 547) stay visible
         check(st.decide_visibility(ActionKind::Ability, 512 + 69) == VisibilityDecision::Show,
               "universal pet command Fight (69/581) remains visible for Necromancer");
-        // Traditional BLM Manafont (server 35 -> client 547) and retired Necro ability (405 -> 917) hidden
-        check(st.decide_visibility(ActionKind::Ability, 512 + 35) == VisibilityDecision::Hide,
-              "unauthorized BLM Manafont (35/547) hidden for Necromancer");
+        check(st.decide_visibility(ActionKind::Ability, 512 + 35) == VisibilityDecision::Show,
+              "subjob WAR Provoke (35/547) remains visible for BLM20/WAR10 Necromancer");
+        // Traditional BLM Manafont (19 -> 531), Elemental Seal (75 -> 587), and retired Necro ability (405 -> 917) hidden
+        check(st.decide_visibility(ActionKind::Ability, 512 + 19) == VisibilityDecision::Hide,
+              "unauthorized BLM Manafont (19/531) hidden for Necromancer");
+        check(st.decide_visibility(ActionKind::Ability, 512 + 75) == VisibilityDecision::Hide,
+              "unauthorized BLM Elemental Seal (75/587) hidden for Necromancer");
         check(st.decide_visibility(ActionKind::Ability, 512 + 405) == VisibilityDecision::Hide,
               "retired Necromancer Summon ability (405/917) hidden");
-        // Leaving Necromancer restores base BLM abilities immediately
+        // Leaving Necromancer restores base BLM abilities immediately & disables BLU-check bypass
         check(st.observe_ssdsb_frame("active=0|soul=astromancer|replace_base=0|replace_base_abilities=0|allowed=|allowed_abilities="),
               "observe_ssdsb_frame clears ability restriction on Soul change");
-        check(st.decide_visibility(ActionKind::Ability, 512 + 35) == VisibilityDecision::Unmanaged,
-              "BLM Manafont (35/547) restored when switching away from Necromancer");
+        check(!st.is_dynamic_non_blu_spell_allowed(715),
+              "BLU-set check bypass disabled when dynamic spellbook is inactive (preserves vanilla BLU)");
+        check(st.decide_visibility(ActionKind::Ability, 512 + 19) == VisibilityDecision::Unmanaged,
+              "BLM Manafont (19/531) restored when switching away from Necromancer");
     }
 
     // QA-SOUL-COMPANIONS-001: Shared Soul Icon Mapping & Active Echo Identity Sync ([SSCMP]|E|)
