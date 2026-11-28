@@ -10,6 +10,8 @@
 
 #include "log.hpp"
 #include "scan.hpp"
+#include "soulspire/echo_icons.hpp"
+#include "soulspire/state.hpp"
 
 namespace vanacore::partylist {
 namespace {
@@ -171,7 +173,10 @@ std::uint32_t __fastcall alliance_hp(void* self, void* /*edx*/, const std::uint8
 
 void __fastcall party_name(void* self, void* /*edx*/, int x, int y, const char* text, std::uint32_t colour)
 {
-    g_name(self, x, y, g_want[kParty].upper ? capitals(text) : text, colour);
+    char echo_buf[64] = {};
+    int draw_x = x;
+    const char* shown = soulspire::echo_icons::format_party_echo_name(x, y, text, echo_buf, sizeof(echo_buf), draw_x);
+    g_name(self, draw_x, y, g_want[kParty].upper ? capitals(shown) : shown, colour);
 }
 void __fastcall alliance_name(void* self, void* /*edx*/, int x, int y, const char* text, std::uint32_t colour)
 {
@@ -337,7 +342,8 @@ void apply()
         const Want& want = g_want[list];
         Rows& rows = g_rows[list];
         point(rows.hp, reinterpret_cast<const void*>(kHpHooks[list]), want.hp != 0);
-        point(rows.name, reinterpret_cast<const void*>(kNameHooks[list]), want.upper);
+        const bool hook_name = want.upper || (list == kParty && soulspire::engine().enabled());
+        point(rows.name, reinterpret_cast<const void*>(kNameHooks[list]), hook_name);
         point(rows.away, reinterpret_cast<const void*>(kNameHooks[list]), want.upper);
         point(rows.tp, reinterpret_cast<const void*>(kTpHooks[list]), want.tp != 0);
         paint(rows.mp, want.mp);

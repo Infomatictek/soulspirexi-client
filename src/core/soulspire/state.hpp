@@ -84,8 +84,19 @@ struct CompanionSpellEntry {
     std::uint16_t icon_id = 0xFFFFu;
     std::uint16_t icon_id_v2 = 0xFFFFu;
     std::string soul_id;
+    std::string canonical_key;
+    std::string abbreviation;
+    std::string icon_asset;
     std::string name;
     std::string description;
+};
+
+struct ActiveEchoIdentity {
+    std::uint32_t entity_id = 0;
+    std::string soul_key;
+    std::string abbr;
+    std::string name;
+    std::string icon_asset;
 };
 
 // SOUL-SPELL-001: Universal registry-driven Dynamic Spellbook metadata & live runtime state.
@@ -280,13 +291,18 @@ public:
         return dynamic_spellbook_gen_.load(std::memory_order_acquire);
     }
 
-    // QA-SOUL-COMPANIONS-001: Fail-closed tester-exclusive Soul Echoes Magic visibility.
+    // QA-SOUL-COMPANIONS-001: Fail-closed tester-exclusive Soul Echoes Magic visibility & active Echo identity.
     bool observe_sscmp_frame(std::string_view payload);
     void set_companions_enabled(bool on) noexcept;
     bool companions_enabled() const noexcept { return companions_enabled_.load(std::memory_order_acquire); }
     std::uint32_t companion_spell_count() const;
     std::string companion_category_label() const;
     std::string companion_system_name() const;
+    bool has_active_echoes() const noexcept { return has_active_echoes_.load(std::memory_order_acquire); }
+    std::uint32_t active_echo_count() const;
+    bool lookup_active_echo_by_id(std::uint32_t entity_id, ActiveEchoIdentity& out) const;
+    bool lookup_active_echo_by_name(std::string_view name, ActiveEchoIdentity& out) const;
+    bool resolve_soul_icon_asset(std::string_view soul_key, std::string& out_asset) const;
 
     // Identity queries & updates.
     bool resolve_label(std::uint8_t job, std::uint8_t branch, bool full, std::string& out) const;
@@ -361,6 +377,7 @@ private:
 
     std::atomic<bool> enabled_{false};
     std::atomic<bool> companions_enabled_{false};
+    std::atomic<bool> has_active_echoes_{false};
     std::atomic<std::uint32_t> dynamic_spellbook_gen_{0};
     std::atomic<std::uint32_t> capabilities_{0};
     std::atomic<std::uint32_t> action_row_limit_{16};
@@ -380,6 +397,9 @@ private:
 
     std::unordered_map<std::uint64_t, VisibilityRecord> visibility_;
     std::unordered_map<std::uint16_t, CompanionSpellEntry> companion_spells_;
+    std::unordered_map<std::string, std::string> soul_key_to_icon_asset_;
+    std::unordered_map<std::uint32_t, ActiveEchoIdentity> active_echoes_by_id_;
+    std::unordered_map<std::string, std::uint32_t> active_echo_id_by_name_;
     std::string companion_hash_;
     std::string companion_category_label_ = "Echoes";
     std::string companion_system_name_ = "Soul Echoes";

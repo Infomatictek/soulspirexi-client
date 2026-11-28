@@ -13,6 +13,7 @@
 #include "../gui.hpp"
 #include "../log.hpp"
 #include "../window.hpp"
+#include "echo_icons.hpp"
 #include "echoes_rebrand.hpp"
 #include "hooks.hpp"
 #include "input_ownership.hpp"
@@ -147,6 +148,7 @@ void install(const wchar_t* install_dir, const wchar_t* settings_ini)
     g_install_dir = install_dir != nullptr ? install_dir : L"";
     while (!g_install_dir.empty() && (g_install_dir.back() == L'\\' || g_install_dir.back() == L'/'))
         g_install_dir.pop_back();
+    echo_icons::set_install_dir(g_install_dir);
 
     const bool enabled = settings_ini != nullptr && settings_ini[0] != L'\0' &&
                          GetPrivateProfileIntW(L"soulspire", L"enabled", 0, settings_ini) != 0;
