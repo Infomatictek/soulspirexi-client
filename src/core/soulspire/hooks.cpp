@@ -37,8 +37,11 @@ constexpr char kPatAbilityIcon[]      = "E8 ?? ?? ?? ?? 83 C4 1C 85 C0 74 12 6A 
 constexpr char kPatMagicFilterCall[]  = "E8 ?? ?? ?? ?? 83 C4 04 84 C0 0F 84 C0 00 00 00 81 FE 00 02 00 00 7C 64";
 constexpr char kPatAbilityFilterCall[] = "E8 ?? ?? ?? ?? 8B 44 24 1C C7 47 58 01 00 00 00 83 F8 FF 74 08 50 8B CF";
 constexpr char kPatCanUseSpell[]      = "A1 ?? ?? ?? ?? 56 8B C8 BA 01 00 00 00 81 E1 FF 00 00 00 57 8B 7C 24 0C";
-constexpr char kPatMissingSpellBit[]  = "BD FE FF FF FF 57 E8 ?? ?? ?? ?? 83 C4 04 84 C0 75 0B 5F 5E 5D B8 FE FF";
-constexpr char kPatMenuSpellElig[]    = "E8 ?? ?? ?? ?? 83 C4 28 84 C0 75 09 5F 5E B8 02 00 00 00 5B C3 6A 00 E8";
+constexpr char kPatSpellNameLookup[] = "51 8B 4C 24 08 53 55 83 C8 FF 56 57 85 C9 0F 84 ?? ?? ?? ?? 80 39 00 0F 84 ?? ?? ?? ?? 8B 0D ?? ?? ?? ?? 85 C9";
+constexpr std::ptrdiff_t kSpellLookupTableOperand = 0x1F;
+constexpr char kPatMenuSpellReject[] = "E8 ?? ?? ?? ?? 83 C4 28 84 C0 75 09 5F 5E B8 02 00 00 00 5B C3";
+constexpr char kPatMenuSpellRange[] = "81 FF 00 02 00 00 7C 5C 81 FF E0 02 00 00 7D 5C 66 83 3D ?? ?? ?? ?? 00 7E 09 5F 5E B8 06 00 00 00 5B C3";
+constexpr char kPatMenuSpellSuccess[] = "81 FF 00 03 00 00 7D 11 68 E5 01 00 00 E8 ?? ?? ?? ?? 83 C4 04 3C 01 75 06 5F 5E 33 C0 5B C3";
 constexpr char kPatItemJobLabel[]     = "E8 ?? ?? ?? ?? 50 8D 4C 24 1C 68 ?? ?? ?? ?? 51 E8 ?? ?? ?? ?? 83 C4 14";
 constexpr char kPatFullJob1[]         = "E8 ?? ?? ?? ?? 83 C4 08 8D 54 24 1C 83 C6 04 50 52 56 8D 44 24 38 68 20";
 constexpr char kPatFullJob2[]         = "E8 ?? ?? ?? ?? 50 8D 44 24 20 83 C6 04 50 56 8D 4C 24 38 68 ?? ?? ?? ??";
@@ -125,6 +128,7 @@ struct CallPatch {
 };
 
 using ActionIconFn   = void*(__cdecl*)(std::uint32_t, std::uint32_t);
+using SpellNameLookupFn = int(__cdecl*)(const char*, int, int);
 using CanShowSpellFn = std::uint8_t(__cdecl*)(const std::uint8_t*);
 using JobLookupFn    = const char*(__cdecl*)(int, int);
 using FfxiOpNewFn            = void*(__cdecl*)(std::uint32_t);
@@ -157,7 +161,6 @@ CallPatch g_ability_desc_patch{};
 CallPatch g_ability_target_patch{};
 CallPatch g_ability_icon_patch{};
 CallPatch g_ability_filter_call_patch{};
-CallPatch g_menu_spell_elig_patch{};
 CallPatch g_item_job_patch{};
 CallPatch g_full_job1_patch{};
 CallPatch g_full_job2_patch{};
@@ -178,8 +181,11 @@ ActionIconFn   g_orig_ability_icon = nullptr;
 CanShowSpellFn g_orig_can_use_spell = nullptr;
 std::uintptr_t g_orig_set_list_count = 0;
 std::uint8_t** g_ability_list_slot = nullptr;
-std::uintptr_t g_orig_menu_spell_elig = 0;
-std::uintptr_t g_missing_spell_resume = 0;
+SpellNameLookupFn g_orig_spell_name_lookup = nullptr;
+std::uint8_t** g_spell_lookup_table_slot = nullptr;
+std::uintptr_t g_menu_spell_range_resume = 0;
+std::uintptr_t g_menu_spell_success_resume = 0;
+std::uintptr_t g_menu_spell_reject_resume = 0;
 std::uintptr_t g_magic_list_blu_check_resume = 0;
 std::uintptr_t g_magic_list_add_row_resume = 0;
 JobLookupFn    g_orig_item_job = nullptr;
@@ -456,6 +462,7 @@ void sync_dynamic_spell_res_table(const std::uint8_t* observed_spell_res, std::u
         // Retail FFXI spell_res stores 24 uint16_t job unlock levels at +14..+61 (48 bytes).
         // Set all job levels to 0xFFFF except the owning Soul's jobId at uint16_t(unlock_level).
         std::memset(entry + 14, 0xFF, 48);
+        std::memset(entry + 92, 0, 4); // No inherited retail job/level rule.
         if (sp.job_id >= 1 && sp.job_id <= 22) {
             const std::uint16_t ulvl = static_cast<std::uint16_t>(sp.unlock_level);
             std::memcpy(entry + 14u + static_cast<std::size_t>(sp.job_id) * 2u, &ulvl, sizeof(ulvl));
@@ -481,13 +488,12 @@ void sync_dynamic_spell_res_table(const std::uint8_t* observed_spell_res, std::u
 // SOUL-ACTION-002: Consolidates magic_list_filter (0x22DAB9 -> 0x22DAC9: `cmp esi, 0x200; jl +0x64`).
 // Retail Magic::Populate gates all spell IDs >= 512 through Blue Magic set-spell checks even when
 // CanShowSpell (0x22CDE0) returns 1 and spell_res->Type is Black Magic. For active non-BLU dynamic
-// spells (e.g. Necromancy 715..749), jump directly to the add-row path (0x22DB35); all vanilla BLU
-// and Trust spells (>= 512) fall through to the exact unmodified retail check at 0x22DAD1.
+// spells in the retail BLU range (512..735), jump to the add-row path (0x22DB35).
+// Otherwise the thunk replays the comparison and resumes at the original branch.
 std::uint8_t __stdcall should_bypass_magic_list_blu_check(std::uint32_t spell_id) noexcept
 {
-    if (spell_id < 0x200u)
-        return 1;
-    if (spell_id <= 1023u && engine().is_dynamic_non_blu_spell_allowed(static_cast<std::uint16_t>(spell_id))) {
+    if (spell_id >= 0x200u && spell_id < 0x2E0u &&
+        engine().is_dynamic_non_blu_spell_allowed(static_cast<std::uint16_t>(spell_id))) {
         engine().increment_hook_hit("magic_list_filter");
         return 1;
     }
@@ -515,41 +521,49 @@ std::uint8_t __cdecl hook_magic_filter(const std::uint8_t* spell_res)
     return g_orig_can_use_spell(spell_res);
 }
 
-std::uint8_t __stdcall hook_knows_missing_spell(const std::uint8_t* spell_res) noexcept
+int __cdecl hook_spell_name_lookup(const char* name, int magic_type, int check_eligibility)
 {
-    if (spell_res == nullptr)
-        return 0;
-    std::uint16_t spell_id = 0;
-    std::memcpy(&spell_id, spell_res, sizeof(spell_id));
-    if (spell_id == 0 || spell_id > 1023)
-        return 0;
-    sync_dynamic_spell_res_table(spell_res, spell_id);
-    if (engine().decide_visibility(ActionKind::Spell, spell_id) == VisibilityDecision::Show) {
+    auto* table = *g_spell_lookup_table_slot;
+    if (name != nullptr && *name != '\0' && table != nullptr) {
+        sync_dynamic_spell_res_table(table + 100u, 1);
+        if (const int spell_id = engine().resolve_dynamic_spell_name(name, magic_type); spell_id != 0) {
+            if (check_eligibility != 0)
+                engine().increment_hook_hit("missing_spell_bit");
+            return spell_id;
+        }
+    }
+
+    const int result = g_orig_spell_name_lookup(name, magic_type, check_eligibility);
+    if (result != -2 || table == nullptr)
+        return result;
+
+    // The original missing-bit hook let explicitly shown spells through when the
+    // learned bit was absent. Retry only that retail failure with the check disabled.
+    const int spell_id = g_orig_spell_name_lookup(name, magic_type, 0);
+    if (spell_id > 0 && spell_id <= 1023 &&
+        engine().decide_visibility(ActionKind::Spell, static_cast<std::uint16_t>(spell_id)) ==
+            VisibilityDecision::Show) {
         engine().increment_hook_hit("missing_spell_bit");
+        return spell_id;
+    }
+    return result;
+}
+
+std::uint8_t __stdcall decide_menu_spell_range(std::uint32_t spell_id) noexcept
+{
+    if (spell_id > 1023u)
+        return 0;
+
+    const auto id = static_cast<std::uint16_t>(spell_id);
+    if (engine().decide_visibility(ActionKind::Spell, id) == VisibilityDecision::Hide) {
+        engine().increment_hook_hit("menu_spell_elig");
+        return 2;
+    }
+    if (spell_id >= 0x200u && spell_id < 0x300u && engine().is_dynamic_non_blu_spell_allowed(id)) {
+        engine().increment_hook_hit("menu_spell_elig");
         return 1;
     }
     return 0;
-}
-
-std::int32_t __stdcall decide_menu_spell_elig(const std::uint8_t* spell_res) noexcept
-{
-    if (spell_res == nullptr)
-        return -1;
-    std::uint16_t spell_id = 0;
-    std::memcpy(&spell_id, spell_res, sizeof(spell_id));
-    if (spell_id == 0 || spell_id > 1023)
-        return -1;
-    sync_dynamic_spell_res_table(spell_res, spell_id);
-    const VisibilityDecision d = engine().decide_visibility(ActionKind::Spell, spell_id);
-    if (d == VisibilityDecision::Show) {
-        engine().increment_hook_hit("menu_spell_elig");
-        return 1;
-    }
-    if (d == VisibilityDecision::Hide) {
-        engine().increment_hook_hit("menu_spell_elig");
-        return 0;
-    }
-    return -1;
 }
 
 // Phase B.2 Hook #20 (ability_list_filter @ 0x22562F):
@@ -783,6 +797,7 @@ __declspec(naked) void thunk_magic_list_blu_bypass()
         jnz add_row
         popad
         popfd
+        cmp esi, 200h
         jmp dword ptr [g_magic_list_blu_check_resume]
     add_row:
         popad
@@ -791,40 +806,29 @@ __declspec(naked) void thunk_magic_list_blu_bypass()
     }
 }
 
-__declspec(naked) void thunk_missing_spell_bit()
+__declspec(naked) void thunk_menu_spell_range()
 {
     __asm {
         pushfd
         pushad
         push edi
-        call hook_knows_missing_spell
+        call decide_menu_spell_range
+        cmp al, 2
+        je rejected
         test al, al
-        jz stock
+        jnz allowed
         popad
         popfd
-        jmp dword ptr [g_missing_spell_resume]
-    stock:
+        cmp edi, 200h
+        jmp dword ptr [g_menu_spell_range_resume]
+    allowed:
         popad
         popfd
-        mov ebp, 0FFFFFFFEh
-        jmp dword ptr [g_missing_spell_resume]
-    }
-}
-
-__declspec(naked) void thunk_menu_spell_elig()
-{
-    __asm {
-        pushad
-        push esi
-        call decide_menu_spell_elig
-        test eax, eax
-        js stock
-        mov [esp + 28], eax
+        jmp dword ptr [g_menu_spell_success_resume]
+    rejected:
         popad
-        ret
-    stock:
-        popad
-        jmp dword ptr [g_orig_menu_spell_elig]
+        popfd
+        jmp dword ptr [g_menu_spell_reject_resume]
     }
 }
 
@@ -1720,7 +1724,7 @@ void install_if_ready()
         if (magic_filter_at != 0) {
             const std::uintptr_t blu_cmp_at = magic_filter_at + 0x10u; // 0x22DAC9: cmp esi, 0x200; jl +0x64
             st.rva = static_cast<std::uint32_t>(blu_cmp_at - base);
-            g_magic_list_blu_check_resume = magic_filter_at + 0x18u;       // 0x22DAD1 (fallthrough to BLU/Trust check)
+            g_magic_list_blu_check_resume = blu_cmp_at + 6u;             // 0x22DACF (original JL)
             g_magic_list_add_row_resume   = magic_filter_at + 0x18u + 0x64u; // 0x22DB35 (add row to Magic List)
             if (imports::jump(reinterpret_cast<void*>(blu_cmp_at), reinterpret_cast<void*>(&thunk_magic_list_blu_bypass))) {
                 st.installed = true;
@@ -1740,22 +1744,24 @@ void install_if_ready()
                  g_ability_filter_call_patch, reinterpret_cast<void*>(&thunk_ability_list_filter),
                  kCapAbilityVisibility, g_orig_set_list_count);
 
-    const std::uintptr_t missing_bit_at = scan::find(ffxi, kPatMissingSpellBit);
     {
         HookStatus st{};
         st.id = "missing_spell_bit";
         st.group = "visibility";
         st.owner = "soulspire";
         st.disposition = "migrated";
-        if (missing_bit_at != 0) {
-            st.rva = static_cast<std::uint32_t>(missing_bit_at - base);
-            g_missing_spell_resume = missing_bit_at + 5;
-            if (imports::jump(reinterpret_cast<void*>(missing_bit_at), reinterpret_cast<void*>(&thunk_missing_spell_bit))) {
+        const std::uintptr_t lookup_at = scan::find(ffxi, kPatSpellNameLookup);
+        if (lookup_at != 0) {
+            st.rva = static_cast<std::uint32_t>(lookup_at - base);
+            g_spell_lookup_table_slot = reinterpret_cast<std::uint8_t**>(
+                scan::operand(lookup_at, kSpellLookupTableOperand));
+            if (imports::detour<SpellNameLookupFn>(reinterpret_cast<SpellNameLookupFn>(lookup_at), 5,
+                                                   &hook_spell_name_lookup, g_orig_spell_name_lookup)) {
                 st.installed = true;
-                st.detail = "prologue jump installed (5B)";
+                st.detail = "spell name lookup detour installed (5B)";
                 caps |= kCapSpellEligibility;
             } else {
-                st.detail = "jump patch failed";
+                st.detail = "detour install failed";
             }
         } else {
             st.detail = "signature not found";
@@ -1763,9 +1769,36 @@ void install_if_ready()
         statuses.push_back(std::move(st));
     }
 
-    install_call("menu_spell_elig", "visibility", scan::find(ffxi, kPatMenuSpellElig),
-                 g_menu_spell_elig_patch, reinterpret_cast<void*>(&thunk_menu_spell_elig),
-                 kCapSpellEligibility, g_orig_menu_spell_elig);
+    {
+        HookStatus st{};
+        st.id = "menu_spell_elig";
+        st.group = "visibility";
+        st.owner = "soulspire";
+        st.disposition = "migrated";
+        // The range gate follows retail action state, recast, job/level and MP checks.
+        // Verify the original upper-range branch lands beside the expected success epilogue.
+        const std::uintptr_t range_at = scan::find(ffxi, kPatMenuSpellRange);
+        const std::uintptr_t success_at = range_at == 0 ? 0 :
+            scan::find(range_at + 0x6Cu, 0x1Fu, kPatMenuSpellSuccess);
+        const std::uintptr_t reject_at = range_at == 0 ? 0 :
+            scan::find(range_at - 0x54u, 0x15u, kPatMenuSpellReject);
+        if (success_at != 0 && reject_at != 0) {
+            st.rva = static_cast<std::uint32_t>(range_at - base);
+            g_menu_spell_range_resume = range_at + 6u;   // original JL
+            g_menu_spell_success_resume = success_at + 0x19u; // return 0
+            g_menu_spell_reject_resume = reject_at + 0x0Cu; // return 2
+            if (imports::jump(reinterpret_cast<void*>(range_at), reinterpret_cast<void*>(&thunk_menu_spell_range))) {
+                st.installed = true;
+                st.detail = "menu spell range gate installed (5B)";
+                caps |= kCapSpellEligibility;
+            } else {
+                st.detail = "jump patch failed";
+            }
+        } else {
+            st.detail = "range or continuation signature not found";
+        }
+        statuses.push_back(std::move(st));
+    }
 
     // Job Identity label hooks (item tooltips + full Soul name)
     install_call("item_job_label",  "identity", scan::find(ffxi, kPatItemJobLabel), g_item_job_patch,
@@ -1967,7 +2000,6 @@ void uninstall()
     g_ability_target_patch.uninstall();
     g_ability_icon_patch.uninstall();
     g_ability_filter_call_patch.uninstall();
-    g_menu_spell_elig_patch.uninstall();
     g_item_job_patch.uninstall();
     g_full_job1_patch.uninstall();
     g_full_job2_patch.uninstall();

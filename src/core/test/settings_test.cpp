@@ -1087,6 +1087,15 @@ int main()
               "Raise Warrior (715) bypasses >=512 BLU-set check in Magic::Populate when active");
         check(st.is_dynamic_non_blu_spell_allowed(723),
               "Grave Cleaver (723) bypasses >=512 BLU-set check while Dullahan active");
+        check(st.resolve_dynamic_spell_name("raise WARRIOR", 0) == 715,
+              "/ma resolves an allowed dynamic name without a retail DAT name");
+        check(st.resolve_dynamic_spell_name("Raise Warrior", 2) == 715 &&
+                  st.resolve_dynamic_spell_name("Raise Warrior", 1) == 0,
+              "typed magic lookup preserves the requested magic group");
+        check(st.resolve_dynamic_spell_name("Fire", 0) == 0,
+              "retail names fall back to the native resolver");
+        check(st.resolve_dynamic_spell_name("Soul Rend", 0) == -2,
+              "dynamic names with an unmet pet requirement fail eligibility");
         check(!st.is_dynamic_non_blu_spell_allowed(731),
               "Corse Soul Rend (731) does NOT bypass >=512 BLU-set check while Dullahan active");
         check(!st.is_dynamic_non_blu_spell_allowed(144),

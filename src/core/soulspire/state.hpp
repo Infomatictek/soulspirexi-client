@@ -296,6 +296,7 @@ public:
     bool observe_ssdsb_frame(std::string_view payload);
     bool dynamic_spellbook_active() const;
     bool is_dynamic_non_blu_spell_allowed(std::uint16_t spell_id) const;
+    int resolve_dynamic_spell_name(std::string_view name, int magic_type) const;
     std::uint32_t dynamic_spell_count() const;
     std::string dynamic_spellbook_hash() const;
     DynamicSpellbookRuntime dynamic_runtime_snapshot() const;

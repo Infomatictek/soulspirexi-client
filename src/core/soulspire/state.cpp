@@ -1489,7 +1489,7 @@ bool EngineState::is_dynamic_non_blu_spell_allowed(std::uint16_t spell_id) const
     if (dit == dynamic_spells_.end())
         return false;
     // Only non-Blue Magic dynamic spells (e.g. Black/White/Dark Magic on repurposed >=512 slots)
-    // bypass FFXiMain's hardcoded `cmp esi, 0x200` Blue Magic set-spell check in Magic::Populate.
+    // bypass FFXiMain's hardcoded `cmp esi, 0x200` retail ID-range checks for the Magic List and menu casting.
     if (dit->second.client_magic_type == 6u)
         return false;
     for (const std::uint16_t allowed_id : dynamic_runtime_.allowed_spells) {
@@ -1497,6 +1497,25 @@ bool EngineState::is_dynamic_non_blu_spell_allowed(std::uint16_t spell_id) const
             return true;
     }
     return false;
+}
+
+int EngineState::resolve_dynamic_spell_name(std::string_view name, int magic_type) const
+{
+    std::lock_guard lock(mutex_);
+    if (!dynamic_runtime_.active)
+        return 0;
+
+    const std::string query = to_lower_ascii(name);
+    for (const auto& [spell_id, spell] : dynamic_spells_) {
+        if (spell.soul_key != dynamic_runtime_.soul_key || spell.client_magic_type == 6u ||
+            (magic_type != 0 && magic_type != spell.client_magic_type) ||
+            to_lower_ascii(spell.name) != query)
+            continue;
+
+        const auto& allowed = dynamic_runtime_.allowed_spells;
+        return std::find(allowed.begin(), allowed.end(), spell_id) != allowed.end() ? spell_id : -2;
+    }
+    return 0;
 }
 
 std::uint32_t EngineState::dynamic_spell_count() const
