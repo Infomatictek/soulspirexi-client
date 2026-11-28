@@ -320,10 +320,14 @@ void EngineState::reset_all()
     action_generation_ = 0;
     visibility_.clear();
     companion_spells_.clear();
+    soul_key_to_icon_asset_.clear();
+    active_echoes_by_id_.clear();
+    active_echo_id_by_name_.clear();
     companion_hash_.clear();
     companion_category_label_ = "Echoes";
     companion_system_name_ = "Soul Echoes";
     companions_enabled_.store(false, std::memory_order_release);
+    has_active_echoes_.store(false, std::memory_order_release);
     dynamic_spells_.clear();
     dynamic_spellbook_hash_.clear();
     dynamic_runtime_ = {};
@@ -360,6 +364,9 @@ void EngineState::reset_session()
     hud_.updated_ms = 0;
     mobs_.clear();
     companions_enabled_.store(false, std::memory_order_release);
+    has_active_echoes_.store(false, std::memory_order_release);
+    active_echoes_by_id_.clear();
+    active_echo_id_by_name_.clear();
     dynamic_runtime_ = {};
 }
 
@@ -1026,6 +1033,12 @@ bool EngineState::load_companions_json(std::string_view json_text)
                             rec.icon_id_v2 = static_cast<std::uint16_t>(v);
                     } else if (fkey == "soulId") {
                         if (!s.parse_string(rec.soul_id)) return false;
+                    } else if (fkey == "canonicalKey") {
+                        if (!s.parse_string(rec.canonical_key)) return false;
+                    } else if (fkey == "abbreviation") {
+                        if (!s.parse_string(rec.abbreviation)) return false;
+                    } else if (fkey == "iconAsset") {
+                        if (!s.parse_string(rec.icon_asset)) return false;
                     } else if (fkey == "displayName") {
                         if (!s.parse_string(rec.name)) return false;
                     } else if (fkey == "description") {
@@ -1054,8 +1067,20 @@ bool EngineState::load_companions_json(std::string_view json_text)
     if (next_spells.empty())
         return false;
 
+    std::unordered_map<std::string, std::string> next_icon_map;
+    for (const auto& [sid, entry] : next_spells) {
+        (void)sid;
+        if (!entry.canonical_key.empty() && !entry.icon_asset.empty()) {
+            next_icon_map[normalize_soul_key(entry.canonical_key)] = entry.icon_asset;
+        }
+        if (!entry.soul_id.empty() && !entry.icon_asset.empty()) {
+            next_icon_map[to_lower_ascii(entry.soul_id)] = entry.icon_asset;
+        }
+    }
+
     std::lock_guard lock(mutex_);
     companion_spells_ = std::move(next_spells);
+    soul_key_to_icon_asset_ = std::move(next_icon_map);
     companion_hash_ = std::move(next_hash);
     companion_category_label_ = next_category.empty() ? std::string("Echoes") : std::move(next_category);
     companion_system_name_ = next_system_name.empty() ? std::string("Soul Echoes") : std::move(next_system_name);
@@ -1078,6 +1103,78 @@ bool EngineState::observe_sscmp_frame(std::string_view payload)
 {
     if (payload.empty())
         return false;
+
+    // Active Echo identity sync frames:
+    //   E|CLEAR
+    //   E|DEL|<entityId>
+    //   E|SET|<entityId>|<canonicalKey>|<abbr>|<name>
+    if (payload.starts_with("E|")) {
+        const std::string_view rest = payload.substr(2);
+        if (rest == "CLEAR") {
+            std::lock_guard lock(mutex_);
+            active_echoes_by_id_.clear();
+            active_echo_id_by_name_.clear();
+            has_active_echoes_.store(false, std::memory_order_release);
+            return true;
+        }
+        if (rest.starts_with("DEL|")) {
+            std::uint32_t eid = 0;
+            const std::string_view id_sv = rest.substr(4);
+            const auto res = std::from_chars(id_sv.data(), id_sv.data() + id_sv.size(), eid);
+            if (res.ec != std::errc{} || eid == 0)
+                return false;
+            std::lock_guard lock(mutex_);
+            const auto it = active_echoes_by_id_.find(eid);
+            if (it != active_echoes_by_id_.end()) {
+                const std::string lname = to_lower_ascii(it->second.name);
+                const auto nit = active_echo_id_by_name_.find(lname);
+                if (nit != active_echo_id_by_name_.end() && nit->second == eid)
+                    active_echo_id_by_name_.erase(nit);
+                active_echoes_by_id_.erase(it);
+            }
+            has_active_echoes_.store(!active_echoes_by_id_.empty(), std::memory_order_release);
+            return true;
+        }
+        if (rest.starts_with("SET|")) {
+            // SET|<eid>|<soulKey>|<abbr>|<name>
+            const std::string_view body = rest.substr(4);
+            const std::size_t b1 = body.find('|');
+            if (b1 == std::string_view::npos) return false;
+            const std::size_t b2 = body.find('|', b1 + 1);
+            if (b2 == std::string_view::npos) return false;
+            const std::size_t b3 = body.find('|', b2 + 1);
+            if (b3 == std::string_view::npos) return false;
+            std::uint32_t eid = 0;
+            const std::string_view id_sv = body.substr(0, b1);
+            const auto res = std::from_chars(id_sv.data(), id_sv.data() + id_sv.size(), eid);
+            if (res.ec != std::errc{} || eid == 0)
+                return false;
+            const std::string soul_key = normalize_soul_key(body.substr(b1 + 1, b2 - b1 - 1));
+            const std::string abbr = sanitize_ascii(body.substr(b2 + 1, b3 - b2 - 1), 8);
+            const std::string name = sanitize_ascii(body.substr(b3 + 1), 32);
+            if (soul_key.empty() || name.empty())
+                return false;
+            std::lock_guard lock(mutex_);
+            std::string asset;
+            if (const auto ait = soul_key_to_icon_asset_.find(soul_key); ait != soul_key_to_icon_asset_.end()) {
+                asset = ait->second;
+            } else {
+                asset = "assets/crystals/" + soul_key + ".png";
+            }
+            ActiveEchoIdentity rec{};
+            rec.entity_id = eid;
+            rec.soul_key = soul_key;
+            rec.abbr = abbr;
+            rec.name = name;
+            rec.icon_asset = std::move(asset);
+            active_echoes_by_id_[eid] = rec;
+            active_echo_id_by_name_[to_lower_ascii(name)] = eid;
+            has_active_echoes_.store(true, std::memory_order_release);
+            return true;
+        }
+        return false;
+    }
+
     bool parsed = false;
     std::size_t pos = 0;
     while (pos < payload.size()) {
@@ -1089,6 +1186,12 @@ bool EngineState::observe_sscmp_frame(std::string_view payload)
             const std::string_view val = part.substr(8);
             const bool on = (val == "1" || val == "true");
             companions_enabled_.store(on, std::memory_order_release);
+            if (!on) {
+                std::lock_guard lock(mutex_);
+                active_echoes_by_id_.clear();
+                active_echo_id_by_name_.clear();
+                has_active_echoes_.store(false, std::memory_order_release);
+            }
             parsed = true;
         }
         if (bar == std::string_view::npos)
@@ -1096,6 +1199,53 @@ bool EngineState::observe_sscmp_frame(std::string_view payload)
         pos = bar + 1;
     }
     return parsed;
+}
+
+std::uint32_t EngineState::active_echo_count() const
+{
+    std::lock_guard lock(mutex_);
+    return static_cast<std::uint32_t>(active_echoes_by_id_.size());
+}
+
+bool EngineState::lookup_active_echo_by_id(std::uint32_t entity_id, ActiveEchoIdentity& out) const
+{
+    if (entity_id == 0)
+        return false;
+    std::lock_guard lock(mutex_);
+    const auto it = active_echoes_by_id_.find(entity_id);
+    if (it == active_echoes_by_id_.end())
+        return false;
+    out = it->second;
+    return true;
+}
+
+bool EngineState::lookup_active_echo_by_name(std::string_view name, ActiveEchoIdentity& out) const
+{
+    if (name.empty())
+        return false;
+    const std::string key = to_lower_ascii(name);
+    std::lock_guard lock(mutex_);
+    const auto nit = active_echo_id_by_name_.find(key);
+    if (nit == active_echo_id_by_name_.end())
+        return false;
+    const auto it = active_echoes_by_id_.find(nit->second);
+    if (it == active_echoes_by_id_.end())
+        return false;
+    out = it->second;
+    return true;
+}
+
+bool EngineState::resolve_soul_icon_asset(std::string_view soul_key, std::string& out_asset) const
+{
+    const std::string norm = normalize_soul_key(soul_key);
+    if (norm.empty())
+        return false;
+    std::lock_guard lock(mutex_);
+    const auto it = soul_key_to_icon_asset_.find(norm);
+    if (it == soul_key_to_icon_asset_.end())
+        return false;
+    out_asset = it->second;
+    return true;
 }
 
 void EngineState::set_companions_enabled(bool on) noexcept

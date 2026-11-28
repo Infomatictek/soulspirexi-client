@@ -19,6 +19,7 @@
 #include "gametext.hpp"
 #include "gameui.hpp"
 #include "gmicons.hpp"
+#include "soulspire/echo_icons.hpp"
 #include "image.hpp"
 #include "log.hpp"
 #include "outline.hpp"
@@ -1191,6 +1192,7 @@ void draw_arrow(void* device, unsigned width, unsigned height)
 void draw(void* device, unsigned width, unsigned height)
 {
     gmicons::draw_mark(device, width, height); // a GM's mark as their staff picture
+    soulspire::echo_icons::draw_party_icons(device, width, height); // QA-SOUL-COMPANIONS-001: native party HUD Echo Soul icons
     draw_name(device, width, height);          // target.font: the name whole in its True Font
     const bool lock = g_pending.set, bar = g_bar_pending.set, arrow = g_arrow_pending.set;
     g_pending.set = g_bar_pending.set = g_arrow_pending.set = false;

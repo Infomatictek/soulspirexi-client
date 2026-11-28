@@ -18,6 +18,7 @@
 #include "game.hpp"
 #include "gameui.hpp"
 #include "gmicons.hpp"
+#include "soulspire/echo_icons.hpp"
 #include "log.hpp"
 #include "nameplates_debug.hpp"
 #include "pivot.hpp"
@@ -913,6 +914,9 @@ std::uint32_t __fastcall draw_letter(void* renderer, void* edx, unsigned prim, u
     const gmicons::Look gm{g_names.gm_size, g_names.gm_x * g_plate_size, g_names.gm_y * g_plate_size};
     if (g_part == Part::icon && gmicons::draw(renderer, g_draw, prim, count, vertices, stride, gm))
         return 0;
+    // QA-SOUL-COMPANIONS-001: Individual Soul nameplate icon beside summoned Soul Echoes (zero new hooks).
+    if (g_part == Part::name)
+        soulspire::echo_icons::draw_nameplate_icon(renderer, g_draw, prim, count, vertices, stride);
     if (g_sharp.on && g_sharp.picture != nullptr) {
         if (g_sharp.drawing && prim == d3d8::kTriangleStrip && count == 2 && stride == kLetterStride &&
             vertices != nullptr) {
@@ -1300,6 +1304,7 @@ void __fastcall draw_name(void* actor, void* edx, std::uint32_t at, std::uint32_
     const Quiet quiet(swallow);
     const Attached attached(target);
     const gmicons::Name gm(g_last_character && g_names.gm ? reinterpret_cast<const char*>(name) : nullptr, entity);
+    const soulspire::echo_icons::NameScope echo_icon(g_last_character ? entity : nullptr);
     // nameplates.smooth and .distance: the line under it at the same size
     g_size_from = size;
     size = g_size_to = by_distance(smoothed(size));

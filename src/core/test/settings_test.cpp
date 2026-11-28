@@ -1098,6 +1098,71 @@ int main()
               "BLM Manafont (35/547) restored when switching away from Necromancer");
     }
 
+    // QA-SOUL-COMPANIONS-001: Shared Soul Icon Mapping & Active Echo Identity Sync ([SSCMP]|E|)
+    {
+        using namespace vanacore::soulspire;
+        EngineState st;
+        st.set_enabled(true);
+        const char* cmp_json = R"({
+            "companionHash": "test_icon_hash",
+            "categoryLabel": "Echoes",
+            "systemName": "Soul Echoes",
+            "companions": [
+                {
+                    "spellId": 896,
+                    "soulId": "war_dps",
+                    "canonicalKey": "berserker",
+                    "abbreviation": "BRZ",
+                    "iconAsset": "assets/crystals/berserker.png",
+                    "iconId": 22,
+                    "iconIdV2": 1010,
+                    "displayName": "Berserker",
+                    "description": "Berserker (WAR Damage) - Heavy dual-axe fury"
+                },
+                {
+                    "spellId": 914,
+                    "soulId": "pld_tank",
+                    "canonicalKey": "defender",
+                    "abbreviation": "MRT",
+                    "iconAsset": "assets/crystals/aegistemplar.png",
+                    "iconId": 22,
+                    "iconIdV2": 1000,
+                    "displayName": "Martyr",
+                    "description": "Martyr (PLD Tank) - Party-intercepting bastion"
+                }
+            ]
+        })";
+        check(st.load_companions_json(cmp_json), "load_companions_json parses canonicalKey/abbreviation/iconAsset");
+        std::string resolved_asset;
+        check(st.resolve_soul_icon_asset("berserker", resolved_asset) &&
+                  resolved_asset == "assets/crystals/berserker.png",
+              "resolve_soul_icon_asset maps berserker -> assets/crystals/berserker.png");
+        check(st.resolve_soul_icon_asset("defender", resolved_asset) &&
+                  resolved_asset == "assets/crystals/aegistemplar.png",
+              "resolve_soul_icon_asset maps defender -> assets/crystals/aegistemplar.png");
+        check(!st.has_active_echoes(), "has_active_echoes starts false");
+        check(st.observe_sscmp_frame("E|SET|15728641|berserker|BRZ|Odette"),
+              "observe_sscmp_frame parses E|SET active Echo identity");
+        check(st.has_active_echoes() && st.active_echo_count() == 1,
+              "active_echo_count == 1 after E|SET");
+        ActiveEchoIdentity echo{};
+        check(st.lookup_active_echo_by_id(15728641u, echo) && echo.soul_key == "berserker" &&
+                  echo.abbr == "BRZ" && echo.icon_asset == "assets/crystals/berserker.png",
+              "lookup_active_echo_by_id returns authoritative Soul icon asset and abbreviation");
+        check(st.lookup_active_echo_by_name("odette", echo) && echo.entity_id == 15728641u,
+              "lookup_active_echo_by_name matches case-insensitively for native party HUD");
+        check(!st.lookup_active_echo_by_id(999999u, echo),
+              "unrelated player/NPC entity ID never matches an active Echo");
+        check(st.observe_sscmp_frame("E|DEL|15728641"), "observe_sscmp_frame parses E|DEL");
+        check(!st.has_active_echoes() && st.active_echo_count() == 0,
+              "E|DEL clears active Echo cleanly");
+        check(st.observe_sscmp_frame("E|SET|15728642|defender|MRT|Aldric"),
+              "second E|SET registers Martyr Echo");
+        st.reset_session();
+        check(!st.has_active_echoes() && st.active_echo_count() == 0,
+              "reset_session clears active Echoes on zone/disconnect");
+    }
+
     printf("\n%s (%d failed)\n", g_failed == 0 ? "PASS" : "FAIL", g_failed);
     return g_failed == 0 ? 0 : 1;
 }
