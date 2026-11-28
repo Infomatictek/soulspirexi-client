@@ -452,11 +452,18 @@ void sync_dynamic_spell_res_table(const std::uint8_t* observed_spell_res, std::u
         std::memcpy(entry + 10, &sp.mp_cost, sizeof(sp.mp_cost));
         entry[12] = sp.client_cast_qsec;
         entry[13] = sp.client_recast_qsec;
-        // Set all job levels to 0xFF except the owning Soul's jobId at unlock_level.
-        std::memset(entry + 14, 0xFF, 24);
+        // Retail FFXI spell_res stores 24 uint16_t job unlock levels at +14..+61 (48 bytes).
+        // Set all job levels to 0xFFFF except the owning Soul's jobId at uint16_t(unlock_level).
+        std::memset(entry + 14, 0xFF, 48);
         if (sp.job_id >= 1 && sp.job_id <= 22) {
-            entry[14 + sp.job_id] = sp.unlock_level;
+            const std::uint16_t ulvl = static_cast<std::uint16_t>(sp.unlock_level);
+            std::memcpy(entry + 14u + static_cast<std::size_t>(sp.job_id) * 2u, &ulvl, sizeof(ulvl));
         }
+        // Ensure valid Black Magic icon slot (v1=8, v2=240) when repurposing unused BLU spell slots.
+        const std::uint16_t dsb_icon_v1 = 8u;
+        const std::uint16_t dsb_icon_v2 = 240u;
+        std::memcpy(entry + 64u, &dsb_icon_v1, sizeof(dsb_icon_v1));
+        std::memcpy(entry + 66u, &dsb_icon_v2, sizeof(dsb_icon_v2));
     }
     g_spell_res_applied_gen = gen;
 }
