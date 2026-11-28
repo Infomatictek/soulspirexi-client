@@ -54,6 +54,24 @@ void on_incoming(EngineState& st, std::uint16_t id, const std::uint8_t* data, st
         return;
     }
 
+    // 0x0C8 (Party Roster / GP_SERV_COMMAND_GROUP_TBL): reconcile active Echo identities against
+    // the authoritative party roster so dismissed/left/reordered Echoes never leave stale icons.
+    // Layout: header(4) + kind(1) + pad(3) + 18 * 12-byte GroupTbl entries (UniqueNo at +0x00).
+    if (id == 0x0C8 && length >= 20 && st.has_active_echoes()) {
+        std::uint32_t member_ids[18]{};
+        std::size_t count = 0;
+        for (std::size_t i = 0; i < 18; ++i) {
+            const std::size_t off = 8u + i * 12u;
+            if (off + 4u > length)
+                break;
+            const std::uint32_t uid = read_u32_le(data + off);
+            if (uid != 0)
+                member_ids[count++] = uid;
+        }
+        st.reconcile_party_roster(member_ids, count);
+        return;
+    }
+
     // 0x061 (Char Stats): main job (+0x0C) and main job level (+0x0D).
     if (id == 0x061 && length >= 0x0E) {
         const std::uint8_t main_job = data[0x0C];

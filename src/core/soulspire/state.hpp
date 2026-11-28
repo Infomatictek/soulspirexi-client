@@ -79,6 +79,16 @@ constexpr std::uint16_t kTrustSpellBaseId     = 896;
 constexpr std::uint16_t kTrustSpellLastSoulId = 961;
 constexpr std::uint16_t kTrustSpellMaxId      = 1023;
 
+// Ephemeral Soul Echo PC-range UniqueNo bounds (matches server Patch 0082 `kCompanionCharIdBase = 0x00F00001u`).
+constexpr std::uint32_t kEchoEntityIdMin = 0x00F00001u;
+constexpr std::uint32_t kEchoEntityIdMax = 0x00FFFFFFu;
+constexpr const char* kNeutralEchoIconAsset = "assets/crystals/echo_neutral.png";
+
+inline bool is_echo_entity_id(std::uint32_t entity_id) noexcept
+{
+    return entity_id >= kEchoEntityIdMin && entity_id <= kEchoEntityIdMax;
+}
+
 struct CompanionSpellEntry {
     std::uint16_t spell_id = 0;
     std::uint16_t icon_id = 0xFFFFu;
@@ -301,7 +311,7 @@ public:
     bool has_active_echoes() const noexcept { return has_active_echoes_.load(std::memory_order_acquire); }
     std::uint32_t active_echo_count() const;
     bool lookup_active_echo_by_id(std::uint32_t entity_id, ActiveEchoIdentity& out) const;
-    bool lookup_active_echo_by_name(std::string_view name, ActiveEchoIdentity& out) const;
+    void reconcile_party_roster(const std::uint32_t* member_ids, std::size_t count);
     bool resolve_soul_icon_asset(std::string_view soul_key, std::string& out_asset) const;
 
     // Identity queries & updates.
@@ -399,7 +409,6 @@ private:
     std::unordered_map<std::uint16_t, CompanionSpellEntry> companion_spells_;
     std::unordered_map<std::string, std::string> soul_key_to_icon_asset_;
     std::unordered_map<std::uint32_t, ActiveEchoIdentity> active_echoes_by_id_;
-    std::unordered_map<std::string, std::uint32_t> active_echo_id_by_name_;
     std::string companion_hash_;
     std::string companion_category_label_ = "Echoes";
     std::string companion_system_name_ = "Soul Echoes";

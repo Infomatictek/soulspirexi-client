@@ -1148,11 +1148,30 @@ int main()
         ActiveEchoIdentity echo{};
         check(st.lookup_active_echo_by_id(15728641u, echo) && echo.soul_key == "berserker" &&
                   echo.abbr == "BRZ" && echo.icon_asset == "assets/crystals/berserker.png",
-              "lookup_active_echo_by_id returns authoritative Soul icon asset and abbreviation");
-        check(st.lookup_active_echo_by_name("odette", echo) && echo.entity_id == 15728641u,
-              "lookup_active_echo_by_name matches case-insensitively for native party HUD");
+              "lookup_active_echo_by_id returns authoritative Soul icon asset by entity ID");
         check(!st.lookup_active_echo_by_id(999999u, echo),
               "unrelated player/NPC entity ID never matches an active Echo");
+        check(is_echo_entity_id(0x00F00001u) && is_echo_entity_id(0x00FFFFFFu) &&
+                  !is_echo_entity_id(0x00F00000u) && !is_echo_entity_id(0x01000000u) &&
+                  !is_echo_entity_id(12345u),
+              "is_echo_entity_id matches ephemeral PC-range Echo IDs exclusively");
+        // Unknown Soul key falls back cleanly to neutral Echo icon asset.
+        check(st.observe_sscmp_frame("E|SET|15728643|unknown_future_soul|UNK|Mireille"),
+              "E|SET with unmapped Soul key falls back to neutral Echo icon");
+        check(st.lookup_active_echo_by_id(15728643u, echo) && echo.icon_asset == kNeutralEchoIconAsset,
+              "unmapped Soul key resolves to neutral Echo fallback asset");
+        // Entity ID reuse overwrites previous Soul identity immediately with zero stale state.
+        check(st.observe_sscmp_frame("E|SET|15728641|defender|MRT|Aldric"),
+              "entity ID reuse overwrites previous Echo Soul identity");
+        check(st.lookup_active_echo_by_id(15728641u, echo) && echo.soul_key == "defender" &&
+                  echo.icon_asset == "assets/crystals/aegistemplar.png",
+              "reused entity ID serves new Soul icon without stale identity");
+        // 0x0C8 party roster reconciliation prunes dismissed/removed Echoes while keeping active ones.
+        const std::uint32_t roster[] = {12345u, 15728641u};
+        st.reconcile_party_roster(roster, 2u);
+        check(st.active_echo_count() == 1 && st.lookup_active_echo_by_id(15728641u, echo) &&
+                  !st.lookup_active_echo_by_id(15728643u, echo),
+              "reconcile_party_roster prunes Echoes absent from 0x0C8 party roster");
         check(st.observe_sscmp_frame("E|DEL|15728641"), "observe_sscmp_frame parses E|DEL");
         check(!st.has_active_echoes() && st.active_echo_count() == 0,
               "E|DEL clears active Echo cleanly");

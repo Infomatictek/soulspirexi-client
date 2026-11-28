@@ -22,9 +22,17 @@
 namespace vanacore::soulspire::echo_icons {
 namespace {
 
-constexpr std::ptrdiff_t kEntityUniqueNo = 0x74;
+// Entity server ID / UniqueNo offset in retail FFXiMain.dll (matches game.cpp entity_field::kServerId).
+constexpr std::ptrdiff_t kEntityServerId = 0x78;
 constexpr int kMipSizes = 4;
 constexpr std::size_t kMaxPartyRows = 6;
+
+// Native party list emblem slot geometry (UI units):
+// Placed immediately to the left of the Echo's character name at `(x, y)` with a 3-unit gap,
+// leaving the name column, HP/MP/TP bars, status icons, and targeting cursor untouched.
+constexpr float kPartyIconUnits = 12.0f;
+constexpr float kPartyEmblemOffsetX = 15.0f;
+constexpr float kPartyEmblemOffsetY = 1.0f;
 
 struct Vertex {
     float x, y, z, rhw;
@@ -47,6 +55,7 @@ struct PartyIconDraw {
 std::mutex g_cache_mutex;
 std::wstring g_install_dir;
 std::unordered_map<std::string, std::unique_ptr<CachedIcon>> g_icons;
+CachedIcon g_procedural_neutral;
 void* g_device = nullptr;
 
 // Per-nameplate active Echo state (game render thread only).
@@ -88,6 +97,73 @@ image::Pixels halved(const image::Pixels& in)
     return out;
 }
 
+// Built-in procedural 32x32 neutral Echo crystal fallback (used only if both the Soul PNG and
+// `echo_neutral.png` are missing on disk). Crisp faceted silver-cyan diamond with transparent alpha.
+image::Pixels build_procedural_neutral_crystal()
+{
+    constexpr int kDim = 32;
+    image::Pixels out;
+    out.width = kDim;
+    out.height = kDim;
+    out.argb.assign(static_cast<std::size_t>(kDim) * static_cast<std::size_t>(kDim), 0u);
+    const float cx = (kDim - 1) * 0.5f;
+    const float cy = (kDim - 1) * 0.5f;
+    for (int y = 0; y < kDim; ++y) {
+        for (int x = 0; x < kDim; ++x) {
+            const float dx = (static_cast<float>(x) - cx) / 11.5f;
+            const float dy = (static_cast<float>(y) - cy) / 14.0f;
+            const float dist = std::fabs(dx) + std::fabs(dy);
+            if (dist > 1.05f)
+                continue;
+            const float edge = std::clamp((1.05f - dist) * 6.5f, 0.0f, 1.0f);
+            const bool border = dist > 0.84f;
+            const bool upper = dy < 0.0f;
+            const bool left = dx < 0.0f;
+            unsigned r = 175u, g = 225u, b = 248u;
+            if (border) {
+                r = 42u; g = 64u; b = 88u;
+            } else if (upper && left) {
+                r = 235u; g = 248u; b = 255u;
+            } else if (upper) {
+                r = 185u; g = 224u; b = 246u;
+            } else if (left) {
+                r = 140u; g = 194u; b = 228u;
+            } else {
+                r = 96u; g = 152u; b = 198u;
+            }
+            const unsigned a = static_cast<unsigned>(std::lround(edge * 245.0f));
+            out.argb[static_cast<std::size_t>(y) * static_cast<std::size_t>(kDim) +
+                     static_cast<std::size_t>(x)] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
+    }
+    return out;
+}
+
+void build_mips(CachedIcon& icon, image::Pixels px)
+{
+    image::Pixels cur = std::move(px);
+    while (icon.count < kMipSizes && !cur.argb.empty()) {
+        image::Pixels next = (cur.width > 1 && cur.height > 1) ? halved(cur) : image::Pixels{};
+        icon.sizes[icon.count++].set_image(std::move(cur.argb), cur.width, cur.height);
+        cur = std::move(next);
+    }
+}
+
+text::Sprite* pick_mip_and_upload(CachedIcon& icon, float pixels, void* device)
+{
+    if (icon.count <= 0)
+        return nullptr;
+    int idx = 0;
+    while (idx + 1 < icon.count && static_cast<float>(icon.sizes[idx + 1].height()) >= pixels)
+        ++idx;
+    text::Sprite* sprite = &icon.sizes[idx];
+    if (!sprite->upload(device) || sprite->texture() == nullptr || sprite->texture_width() == 0 ||
+        sprite->texture_height() == 0) {
+        return nullptr;
+    }
+    return sprite;
+}
+
 std::wstring to_wide_relpath(std::string_view rel)
 {
     std::wstring out;
@@ -107,8 +183,8 @@ bool decode_shared_icon_file(const std::wstring& install_dir, std::string_view i
         return false;
     const std::wstring rel = to_wide_relpath(icon_asset);
     const std::wstring candidates[3] = {
-        install_dir + L"\\addons\\soulspire_core\\" + rel,
         install_dir + L"\\addons\\vanacore\\soulspire_core\\" + rel,
+        install_dir + L"\\addons\\soulspire_core\\" + rel,
         install_dir + L"\\" + rel,
     };
     bool ok = false;
@@ -124,22 +200,23 @@ bool decode_shared_icon_file(const std::wstring& install_dir, std::string_view i
     return ok;
 }
 
-text::Sprite* get_sized_sprite(const std::string& icon_asset, float pixels, void* device)
+void release_all_locked() noexcept
 {
-    if (icon_asset.empty() || device == nullptr)
-        return nullptr;
-
-    std::lock_guard lock(g_cache_mutex);
-    if (device != g_device) {
-        for (auto& [key, entry] : g_icons) {
-            if (entry) {
-                for (text::Sprite& sp : entry->sizes)
-                    sp.release();
-            }
+    for (auto& [key, entry] : g_icons) {
+        if (entry) {
+            for (text::Sprite& sp : entry->sizes)
+                sp.release();
         }
-        g_device = device;
     }
+    for (text::Sprite& sp : g_procedural_neutral.sizes)
+        sp.release();
+    g_device = nullptr;
+}
 
+text::Sprite* get_cached_file_sprite_locked(const std::string& icon_asset, float pixels, void* device)
+{
+    if (icon_asset.empty())
+        return nullptr;
     auto& ptr = g_icons[icon_asset];
     if (!ptr)
         ptr = std::make_unique<CachedIcon>();
@@ -148,29 +225,38 @@ text::Sprite* get_sized_sprite(const std::string& icon_asset, float pixels, void
     if (!icon.attempted) {
         icon.attempted = true;
         image::Pixels px;
-        if (decode_shared_icon_file(g_install_dir, icon_asset, px) && !px.argb.empty()) {
-            image::Pixels cur = std::move(px);
-            while (icon.count < kMipSizes && !cur.argb.empty()) {
-                image::Pixels next = (cur.width > 1 && cur.height > 1) ? halved(cur) : image::Pixels{};
-                icon.sizes[icon.count++].set_image(std::move(cur.argb), cur.width, cur.height);
-                cur = std::move(next);
-            }
-        }
+        if (decode_shared_icon_file(g_install_dir, icon_asset, px) && !px.argb.empty())
+            build_mips(icon, std::move(px));
     }
+    return pick_mip_and_upload(icon, pixels, device);
+}
 
-    if (icon.count <= 0)
+text::Sprite* get_sized_sprite(const std::string& icon_asset, float pixels, void* device)
+{
+    if (device == nullptr)
         return nullptr;
 
-    int idx = 0;
-    while (idx + 1 < icon.count && static_cast<float>(icon.sizes[idx + 1].height()) >= pixels)
-        ++idx;
-
-    text::Sprite* sprite = &icon.sizes[idx];
-    if (!sprite->upload(device) || sprite->texture() == nullptr || sprite->texture_width() == 0 ||
-        sprite->texture_height() == 0) {
-        return nullptr;
+    std::lock_guard lock(g_cache_mutex);
+    if (device != g_device) {
+        release_all_locked();
+        g_device = device;
     }
-    return sprite;
+
+    if (text::Sprite* sprite = get_cached_file_sprite_locked(icon_asset, pixels, device); sprite != nullptr)
+        return sprite;
+
+    // Fallback 1: neutral Echo icon PNG on disk (`assets/crystals/echo_neutral.png`).
+    if (icon_asset != kNeutralEchoIconAsset) {
+        if (text::Sprite* neutral = get_cached_file_sprite_locked(kNeutralEchoIconAsset, pixels, device); neutral != nullptr)
+            return neutral;
+    }
+
+    // Fallback 2: built-in procedural neutral Echo crystal sprite (never fails when disk assets are absent).
+    if (!g_procedural_neutral.attempted) {
+        g_procedural_neutral.attempted = true;
+        build_mips(g_procedural_neutral, build_procedural_neutral_crystal());
+    }
+    return pick_mip_and_upload(g_procedural_neutral, pixels, device);
 }
 
 DWORD shown_alpha(void* device, DWORD letter)
@@ -223,6 +309,22 @@ void draw_picture_quad(void* renderer, DrawFn draw, void* device, const text::Sp
         call(device, slot::SetRenderState, d3d8::rs::AlphaRef, alpha_ref);
 }
 
+bool resolve_echo_icon_for_entity(std::uint32_t entity_id, std::string& out_asset) noexcept
+{
+    if (entity_id == 0)
+        return false;
+    ActiveEchoIdentity echo{};
+    if (engine().has_active_echoes() && engine().lookup_active_echo_by_id(entity_id, echo)) {
+        out_asset = echo.icon_asset.empty() ? std::string(kNeutralEchoIconAsset) : std::move(echo.icon_asset);
+        return true;
+    }
+    if (is_echo_entity_id(entity_id)) {
+        out_asset = kNeutralEchoIconAsset;
+        return true;
+    }
+    return false;
+}
+
 } // namespace
 
 void set_install_dir(std::wstring install_dir)
@@ -231,25 +333,26 @@ void set_install_dir(std::wstring install_dir)
     g_install_dir = std::move(install_dir);
 }
 
+void release_device_resources() noexcept
+{
+    std::lock_guard lock(g_cache_mutex);
+    release_all_locked();
+}
+
 NameScope::NameScope(const void* entity) noexcept
 {
     g_plate_active = false;
     g_plate_drawn = false;
     g_plate_icon_asset.clear();
-    if (entity == nullptr || !engine().has_active_echoes())
+    if (entity == nullptr || !engine().enabled())
         return;
 
     std::uint32_t entity_id = 0;
-    std::memcpy(&entity_id, static_cast<const char*>(entity) + kEntityUniqueNo, sizeof(entity_id));
-    if (entity_id == 0)
-        return;
-
-    ActiveEchoIdentity echo{};
-    if (!engine().lookup_active_echo_by_id(entity_id, echo) || echo.icon_asset.empty())
+    std::memcpy(&entity_id, static_cast<const char*>(entity) + kEntityServerId, sizeof(entity_id));
+    if (!resolve_echo_icon_for_entity(entity_id, g_plate_icon_asset))
         return;
 
     g_plate_active = true;
-    g_plate_icon_asset = std::move(echo.icon_asset);
 }
 
 NameScope::~NameScope() noexcept
@@ -310,63 +413,34 @@ void draw_nameplate_icon(void* renderer, DrawFn draw, unsigned prim, unsigned co
     g_plate_drawn = true;
 }
 
-std::string build_party_echo_label(std::string_view name, std::string_view abbr, std::size_t max_chars)
+void queue_party_echo_icon(std::uint32_t member_id, int x, int y) noexcept
 {
-    if (name.empty())
-        return {};
-    if (abbr.empty() || max_chars < 6)
-        return std::string(name.substr(0, max_chars));
-
-    // Format "<Name> [<ABBR>]" while keeping total length <= max_chars so HP/MP/TP columns never clip.
-    const std::string suffix = " [" + std::string(abbr.substr(0, 3)) + "]";
-    if (name.size() + suffix.size() <= max_chars)
-        return std::string(name) + suffix;
-    const std::size_t keep = (max_chars > suffix.size()) ? (max_chars - suffix.size()) : 0;
-    if (keep < 3)
-        return std::string(name.substr(0, max_chars));
-    return std::string(name.substr(0, keep)) + suffix;
-}
-
-const char* format_party_echo_name(int x, int y, const char* text, char* buf,
-                                   std::size_t buf_sz, int& out_x) noexcept
-{
-    out_x = x;
-    if (text == nullptr || text[0] == '\0' || !engine().has_active_echoes())
-        return text;
-
-    ActiveEchoIdentity echo{};
-    if (!engine().lookup_active_echo_by_name(text, echo))
-        return text;
-
-    if (!echo.icon_asset.empty() && g_party_draw_count < kMaxPartyRows) {
-        g_party_draws[g_party_draw_count++] = PartyIconDraw{x, y, echo.icon_asset};
-        out_x = x + 14;
-    }
-
-    if (buf != nullptr && buf_sz > 1 && !echo.abbr.empty()) {
-        const std::string formatted = build_party_echo_label(text, echo.abbr, std::min<std::size_t>(15, buf_sz - 1));
-        std::memcpy(buf, formatted.data(), formatted.size());
-        buf[formatted.size()] = '\0';
-        return buf;
-    }
-    return text;
+    if (member_id == 0 || g_party_draw_count >= kMaxPartyRows || !engine().enabled())
+        return;
+    std::string icon_asset;
+    if (!resolve_echo_icon_for_entity(member_id, icon_asset))
+        return;
+    g_party_draws[g_party_draw_count++] = PartyIconDraw{x, y, std::move(icon_asset)};
 }
 
 void draw_party_icons(void* device, unsigned width, unsigned height) noexcept
 {
     const std::size_t count = g_party_draw_count;
     g_party_draw_count = 0;
-    if (count == 0 || device == nullptr)
+    if (count == 0 || device == nullptr || width == 0 || height == 0)
         return;
 
-    constexpr float kIconUnits = 12.0f;
+    // Ensure uispace is resolved even when [client] target.* options are at defaults.
+    if (!uispace::find(GetModuleHandleW(L"FFXiMain.dll")))
+        return;
+
     for (std::size_t i = 0; i < count; ++i) {
         const PartyIconDraw& row = g_party_draws[i];
         float left = 0.0f, top = 0.0f, right = 0.0f, bottom = 0.0f, scale = 0.0f;
-        const float ux = static_cast<float>(row.x);
-        const float uy = static_cast<float>(row.y) + 1.0f;
+        const float ux = std::max(1.0f, static_cast<float>(row.x) - kPartyEmblemOffsetX);
+        const float uy = static_cast<float>(row.y) + kPartyEmblemOffsetY;
         if (!uispace::to_pixels(ux, uy, width, height, left, top, scale) ||
-            !uispace::to_pixels(ux + kIconUnits, uy + kIconUnits, width, height, right, bottom, scale)) {
+            !uispace::to_pixels(ux + kPartyIconUnits, uy + kPartyIconUnits, width, height, right, bottom, scale)) {
             continue;
         }
         const float tall = bottom - top;

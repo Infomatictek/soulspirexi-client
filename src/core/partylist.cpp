@@ -171,12 +171,44 @@ std::uint32_t __fastcall alliance_hp(void* self, void* /*edx*/, const std::uint8
     return hp_colour(kAlliance, self, member);
 }
 
+constexpr std::ptrdiff_t kMemberServerId = 0x18; // PartyMember::ServerId (game.cpp member_field::kServerId)
+const std::uint8_t* g_party_member = nullptr;
+
+std::uint32_t read_member_id(const std::uint8_t* member) noexcept
+{
+    if (member == nullptr)
+        return 0;
+    __try {
+        std::uint32_t id = 0;
+        std::memcpy(&id, member + kMemberServerId, sizeof(id));
+        return id;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
 void __fastcall party_name(void* self, void* /*edx*/, int x, int y, const char* text, std::uint32_t colour)
 {
-    char echo_buf[64] = {};
-    int draw_x = x;
-    const char* shown = soulspire::echo_icons::format_party_echo_name(x, y, text, echo_buf, sizeof(echo_buf), draw_x);
-    g_name(self, draw_x, y, g_want[kParty].upper ? capitals(shown) : shown, colour);
+    const std::uint8_t* const member = g_party_member;
+    g_party_member = nullptr;
+    if (const std::uint32_t member_id = read_member_id(member); member_id != 0)
+        soulspire::echo_icons::queue_party_echo_icon(member_id, x, y);
+    g_name(self, x, y, g_want[kParty].upper ? capitals(text) : text, colour);
+}
+
+// Captures `esi` (const PartyMember*) at the native kName[kParty] call site (`lea edx,[esi+6]`)
+// without introducing any new FFXiMain.dll hook, then tail-jumps to party_name.
+__declspec(naked) void party_name_stub()
+{
+    __asm {
+        mov g_party_member, esi
+        jmp party_name
+    }
+}
+
+void __fastcall party_away_name(void* self, void* /*edx*/, int x, int y, const char* text, std::uint32_t colour)
+{
+    g_name(self, x, y, g_want[kParty].upper ? capitals(text) : text, colour);
 }
 void __fastcall alliance_name(void* self, void* /*edx*/, int x, int y, const char* text, std::uint32_t colour)
 {
@@ -209,7 +241,8 @@ using HpHook = std::uint32_t(__fastcall*)(void*, void*, const std::uint8_t*);
 using NameHook = void(__fastcall*)(void*, void*, int, int, const char*, std::uint32_t);
 using TpHook = void(__fastcall*)(void*, void*, int, int, int);
 const HpHook kHpHooks[kLists] = {&party_hp, &alliance_hp};
-const NameHook kNameHooks[kLists] = {&party_name, &alliance_name};
+const NameHook kNameHooks[kLists] = {reinterpret_cast<NameHook>(&party_name_stub), &alliance_name};
+const NameHook kAwayHooks[kLists] = {&party_away_name, &alliance_name};
 const TpHook kTpHooks[kLists] = {&party_tp, &alliance_tp};
 
 std::uintptr_t call_target(std::uintptr_t at)
@@ -344,7 +377,7 @@ void apply()
         point(rows.hp, reinterpret_cast<const void*>(kHpHooks[list]), want.hp != 0);
         const bool hook_name = want.upper || (list == kParty && soulspire::engine().enabled());
         point(rows.name, reinterpret_cast<const void*>(kNameHooks[list]), hook_name);
-        point(rows.away, reinterpret_cast<const void*>(kNameHooks[list]), want.upper);
+        point(rows.away, reinterpret_cast<const void*>(kAwayHooks[list]), want.upper);
         point(rows.tp, reinterpret_cast<const void*>(kTpHooks[list]), want.tp != 0);
         paint(rows.mp, want.mp);
     }
