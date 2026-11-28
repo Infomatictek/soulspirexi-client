@@ -111,9 +111,11 @@ const Source* locate(const std::string& name, const Source* only, std::string& d
         folder = where;
         return true;
     };
-    if ((only == nullptr || only == &kSources[0]) && find(kShippedFolder))
+    if (addons::ashita_enabled() && (only == nullptr || only == &kSources[0]) && find(kShippedFolder))
         return &kSources[0];
     for (const Source& source : kSources) {
+        if (&source == &kSources[0] && !addons::ashita_enabled())
+            continue;
         if (only != nullptr && &source != only)
             continue;
         if (find(source.folder))
@@ -181,15 +183,18 @@ void install(const wchar_t* install_dir, const wchar_t* settings_ini)
     g_install = ansi(install_dir) + "\\";
     // The folders, so it's clear where plugins go.
     CreateDirectoryA((g_install + "plugins").c_str(), nullptr);
-    for (const Source& source : kSources)
-        CreateDirectoryA((g_install + source.folder).c_str(), nullptr);
+    for (const Source& source : kSources) {
+        if (&source != &kSources[0] || addons::ashita_enabled())
+            CreateDirectoryA((g_install + source.folder).c_str(), nullptr);
+    }
     g_silent = settings_ini != nullptr && GetPrivateProfileIntW(L"addons", L"plugins.silent", 0, settings_ini) != 0;
     g_silent_ini = g_silent;
     plugin_memory::install();
-    ashita::install(g_install, settings_ini != nullptr ? settings_ini : L"");
+    if (addons::ashita_enabled())
+        ashita::install(g_install, settings_ini != nullptr ? settings_ini : L"");
     windower::install(g_install);
-    log::write(L"Plugins: from %ls\\plugins (ashita: Ashita interface 4.16 and 4.30; windower: Windower 4, interface 0x04070300, and Windower 3)",
-               install_dir);
+    log::write(L"Plugins: from %ls\\plugins (Ashita compatibility %ls; Windower 4 and 3)",
+               install_dir, addons::ashita_enabled() ? L"enabled" : L"disabled");
 }
 
 void reload(const wchar_t* ini)
@@ -229,6 +234,10 @@ bool load(const std::string& name_in, const std::string& kind, const std::string
     const Source* only = kind.empty() ? nullptr : source_named(lower(kind));
     if (!kind.empty() && only == nullptr) {
         say_error("\"" + kind + "\" isn't a plugin kind (ashita or windower)");
+        return false;
+    }
+    if (only == &kSources[0] && !addons::ashita_enabled()) {
+        say_error("[addons] ashita.enabled=0: Ashita plugin compatibility is disabled in this profile.");
         return false;
     }
     Loaded already;
