@@ -127,6 +127,43 @@ struct CallPatch {
     }
 };
 
+// imports::jump writes five bytes, even when the relocated instruction is longer.
+struct JumpPatch {
+    std::uint8_t* site = nullptr;
+    std::uint8_t original[5]{};
+    std::uint8_t installed[5]{};
+
+    bool install(std::uintptr_t address, void* replacement, std::size_t prologue = 0,
+                 void** trampoline = nullptr) noexcept
+    {
+        auto* code = reinterpret_cast<std::uint8_t*>(address);
+        std::memcpy(original, code, sizeof(original));
+        if (trampoline != nullptr) {
+            *trampoline = imports::detour(code, prologue, replacement);
+            if (*trampoline == nullptr)
+                return false;
+        } else if (!imports::jump(code, replacement)) {
+            return false;
+        }
+        std::memcpy(installed, code, sizeof(installed));
+        site = code;
+        return true;
+    }
+
+    void uninstall() noexcept
+    {
+        if (site == nullptr || std::memcmp(site, installed, sizeof(installed)) != 0)
+            return;
+        DWORD protect = 0;
+        if (!VirtualProtect(site, sizeof(original), PAGE_EXECUTE_READWRITE, &protect))
+            return;
+        std::memcpy(site, original, sizeof(original));
+        FlushInstructionCache(GetCurrentProcess(), site, sizeof(original));
+        VirtualProtect(site, sizeof(original), protect, &protect);
+        site = nullptr;
+    }
+};
+
 using ActionIconFn   = void*(__cdecl*)(std::uint32_t, std::uint32_t);
 using SpellNameLookupFn = int(__cdecl*)(const char*, int, int);
 using CanShowSpellFn = std::uint8_t(__cdecl*)(const std::uint8_t*);
@@ -161,6 +198,9 @@ CallPatch g_ability_desc_patch{};
 CallPatch g_ability_target_patch{};
 CallPatch g_ability_icon_patch{};
 CallPatch g_ability_filter_call_patch{};
+JumpPatch g_magic_list_patch{};
+JumpPatch g_spell_lookup_patch{};
+JumpPatch g_menu_spell_patch{};
 CallPatch g_item_job_patch{};
 CallPatch g_full_job1_patch{};
 CallPatch g_full_job2_patch{};
@@ -1726,7 +1766,7 @@ void install_if_ready()
             st.rva = static_cast<std::uint32_t>(blu_cmp_at - base);
             g_magic_list_blu_check_resume = blu_cmp_at + 6u;             // 0x22DACF (original JL)
             g_magic_list_add_row_resume   = magic_filter_at + 0x18u + 0x64u; // 0x22DB35 (add row to Magic List)
-            if (imports::jump(reinterpret_cast<void*>(blu_cmp_at), reinterpret_cast<void*>(&thunk_magic_list_blu_bypass))) {
+            if (g_magic_list_patch.install(blu_cmp_at, reinterpret_cast<void*>(&thunk_magic_list_blu_bypass))) {
                 st.installed = true;
                 st.detail = "consolidated BLU-range bypass jump installed (5B)";
                 caps |= kCapMagicVisibility;
@@ -1755,8 +1795,10 @@ void install_if_ready()
             st.rva = static_cast<std::uint32_t>(lookup_at - base);
             g_spell_lookup_table_slot = reinterpret_cast<std::uint8_t**>(
                 scan::operand(lookup_at, kSpellLookupTableOperand));
-            if (imports::detour<SpellNameLookupFn>(reinterpret_cast<SpellNameLookupFn>(lookup_at), 5,
-                                                   &hook_spell_name_lookup, g_orig_spell_name_lookup)) {
+            void* trampoline = nullptr;
+            if (g_spell_lookup_patch.install(lookup_at, reinterpret_cast<void*>(&hook_spell_name_lookup),
+                                             5, &trampoline)) {
+                g_orig_spell_name_lookup = reinterpret_cast<SpellNameLookupFn>(trampoline);
                 st.installed = true;
                 st.detail = "spell name lookup detour installed (5B)";
                 caps |= kCapSpellEligibility;
@@ -1787,7 +1829,7 @@ void install_if_ready()
             g_menu_spell_range_resume = range_at + 6u;   // original JL
             g_menu_spell_success_resume = success_at + 0x19u; // return 0
             g_menu_spell_reject_resume = reject_at + 0x0Cu; // return 2
-            if (imports::jump(reinterpret_cast<void*>(range_at), reinterpret_cast<void*>(&thunk_menu_spell_range))) {
+            if (g_menu_spell_patch.install(range_at, reinterpret_cast<void*>(&thunk_menu_spell_range))) {
                 st.installed = true;
                 st.detail = "menu spell range gate installed (5B)";
                 caps |= kCapSpellEligibility;
@@ -1991,6 +2033,9 @@ void install_if_ready()
 
 void uninstall()
 {
+    g_menu_spell_patch.uninstall();
+    g_spell_lookup_patch.uninstall();
+    g_magic_list_patch.uninstall();
     g_magic_row_patch.uninstall();
     g_magic_desc_patch.uninstall();
     g_magic_target_patch.uninstall();
