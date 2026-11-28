@@ -74,10 +74,10 @@ struct SoulIdentityEntry {
 };
 
 // QA-SOUL-COMPANIONS-001: Native Trust Magic spell range repurposed for Soul Companions.
-// Spells 896..961 map 1:1 to the 66 canonical Souls; 962..1017 are legacy Trusts (always hidden).
+// Spells 896..961 map 1:1 to the 66 canonical Souls; 962..1023 (incl. 1018 Iroha II, 1019 Shantotto II) are legacy Trusts (always hidden).
 constexpr std::uint16_t kTrustSpellBaseId     = 896;
 constexpr std::uint16_t kTrustSpellLastSoulId = 961;
-constexpr std::uint16_t kTrustSpellMaxId      = 1017;
+constexpr std::uint16_t kTrustSpellMaxId      = 1023;
 
 struct CompanionSpellEntry {
     std::uint16_t spell_id = 0;

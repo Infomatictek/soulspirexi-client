@@ -490,6 +490,7 @@ std::uint8_t __stdcall hook_knows_missing_spell(const std::uint8_t* spell_res) n
     std::memcpy(&spell_id, spell_res, sizeof(spell_id));
     if (spell_id == 0 || spell_id > 1023)
         return 0;
+    sync_dynamic_spell_res_table(spell_res, spell_id);
     if (engine().decide_visibility(ActionKind::Spell, spell_id) == VisibilityDecision::Show) {
         engine().increment_hook_hit("missing_spell_bit");
         return 1;
@@ -505,6 +506,7 @@ std::int32_t __stdcall decide_menu_spell_elig(const std::uint8_t* spell_res) noe
     std::memcpy(&spell_id, spell_res, sizeof(spell_id));
     if (spell_id == 0 || spell_id > 1023)
         return -1;
+    sync_dynamic_spell_res_table(spell_res, spell_id);
     const VisibilityDecision d = engine().decide_visibility(ActionKind::Spell, spell_id);
     if (d == VisibilityDecision::Show) {
         engine().increment_hook_hit("menu_spell_elig");

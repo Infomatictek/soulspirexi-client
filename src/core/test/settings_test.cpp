@@ -922,6 +922,25 @@ int main()
         check(!st.companions_enabled(), "reset_session resets companions_enabled to false (fail-closed)");
         check(st.decide_visibility(ActionKind::Spell, 897) == VisibilityDecision::Hide,
               "Soul Echo spell 897 hidden again after session reset");
+        // Regression test: retail Trust spells 1018 (Iroha II), 1019 (Shantotto II), and 1020..1023 must ALWAYS be hidden
+        check(st.decide_visibility(ActionKind::Spell, 1018) == VisibilityDecision::Hide,
+              "retail Trust spell 1018 (Iroha II) hidden when Echoes disabled");
+        check(st.decide_visibility(ActionKind::Spell, 1019) == VisibilityDecision::Hide,
+              "retail Trust spell 1019 (Shantotto II) hidden when Echoes disabled");
+        check(st.decide_visibility(ActionKind::Spell, 1023) == VisibilityDecision::Hide,
+              "retail Trust ceiling spell 1023 hidden when Echoes disabled");
+        st.set_companions_enabled(true);
+        check(st.decide_visibility(ActionKind::Spell, 1018) == VisibilityDecision::Hide,
+              "retail Trust spell 1018 (Iroha II) permanently hidden even when Echoes enabled");
+        check(st.decide_visibility(ActionKind::Spell, 1019) == VisibilityDecision::Hide,
+              "retail Trust spell 1019 (Shantotto II) permanently hidden even when Echoes enabled");
+        check(st.decide_visibility(ActionKind::Spell, 1023) == VisibilityDecision::Hide,
+              "retail Trust ceiling spell 1023 permanently hidden even when Echoes enabled");
+        ActionRecord trust_leak{};
+        check(!st.lookup_action(ActionKind::Spell, 1018, trust_leak) &&
+                  !st.lookup_action(ActionKind::Spell, 1019, trust_leak),
+              "lookup_action never returns metadata for legacy Trust spells 1018/1019");
+        st.reset_session();
     }
 
     // SOUL-SPELL-001: Universal Dynamic Spellbook & Necromancer visibility/naming/suppression tests
