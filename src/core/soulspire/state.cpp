@@ -322,7 +322,6 @@ void EngineState::reset_all()
     companion_spells_.clear();
     soul_key_to_icon_asset_.clear();
     active_echoes_by_id_.clear();
-    active_echo_id_by_name_.clear();
     companion_hash_.clear();
     companion_category_label_ = "Echoes";
     companion_system_name_ = "Soul Echoes";
@@ -366,7 +365,6 @@ void EngineState::reset_session()
     companions_enabled_.store(false, std::memory_order_release);
     has_active_echoes_.store(false, std::memory_order_release);
     active_echoes_by_id_.clear();
-    active_echo_id_by_name_.clear();
     dynamic_runtime_ = {};
 }
 
@@ -1113,7 +1111,6 @@ bool EngineState::observe_sscmp_frame(std::string_view payload)
         if (rest == "CLEAR") {
             std::lock_guard lock(mutex_);
             active_echoes_by_id_.clear();
-            active_echo_id_by_name_.clear();
             has_active_echoes_.store(false, std::memory_order_release);
             return true;
         }
@@ -1124,14 +1121,7 @@ bool EngineState::observe_sscmp_frame(std::string_view payload)
             if (res.ec != std::errc{} || eid == 0)
                 return false;
             std::lock_guard lock(mutex_);
-            const auto it = active_echoes_by_id_.find(eid);
-            if (it != active_echoes_by_id_.end()) {
-                const std::string lname = to_lower_ascii(it->second.name);
-                const auto nit = active_echo_id_by_name_.find(lname);
-                if (nit != active_echo_id_by_name_.end() && nit->second == eid)
-                    active_echo_id_by_name_.erase(nit);
-                active_echoes_by_id_.erase(it);
-            }
+            active_echoes_by_id_.erase(eid);
             has_active_echoes_.store(!active_echoes_by_id_.empty(), std::memory_order_release);
             return true;
         }
@@ -1159,7 +1149,7 @@ bool EngineState::observe_sscmp_frame(std::string_view payload)
             if (const auto ait = soul_key_to_icon_asset_.find(soul_key); ait != soul_key_to_icon_asset_.end()) {
                 asset = ait->second;
             } else {
-                asset = "assets/crystals/" + soul_key + ".png";
+                asset = kNeutralEchoIconAsset;
             }
             ActiveEchoIdentity rec{};
             rec.entity_id = eid;
@@ -1167,8 +1157,7 @@ bool EngineState::observe_sscmp_frame(std::string_view payload)
             rec.abbr = abbr;
             rec.name = name;
             rec.icon_asset = std::move(asset);
-            active_echoes_by_id_[eid] = rec;
-            active_echo_id_by_name_[to_lower_ascii(name)] = eid;
+            active_echoes_by_id_[eid] = std::move(rec);
             has_active_echoes_.store(true, std::memory_order_release);
             return true;
         }
@@ -1189,7 +1178,6 @@ bool EngineState::observe_sscmp_frame(std::string_view payload)
             if (!on) {
                 std::lock_guard lock(mutex_);
                 active_echoes_by_id_.clear();
-                active_echo_id_by_name_.clear();
                 has_active_echoes_.store(false, std::memory_order_release);
             }
             parsed = true;
@@ -1219,20 +1207,27 @@ bool EngineState::lookup_active_echo_by_id(std::uint32_t entity_id, ActiveEchoId
     return true;
 }
 
-bool EngineState::lookup_active_echo_by_name(std::string_view name, ActiveEchoIdentity& out) const
+void EngineState::reconcile_party_roster(const std::uint32_t* member_ids, std::size_t count)
 {
-    if (name.empty())
-        return false;
-    const std::string key = to_lower_ascii(name);
     std::lock_guard lock(mutex_);
-    const auto nit = active_echo_id_by_name_.find(key);
-    if (nit == active_echo_id_by_name_.end())
-        return false;
-    const auto it = active_echoes_by_id_.find(nit->second);
-    if (it == active_echoes_by_id_.end())
-        return false;
-    out = it->second;
-    return true;
+    if (active_echoes_by_id_.empty())
+        return;
+    for (auto it = active_echoes_by_id_.begin(); it != active_echoes_by_id_.end(); ) {
+        bool present = false;
+        if (member_ids != nullptr) {
+            for (std::size_t i = 0; i < count; ++i) {
+                if (member_ids[i] == it->first) {
+                    present = true;
+                    break;
+                }
+            }
+        }
+        if (!present)
+            it = active_echoes_by_id_.erase(it);
+        else
+            ++it;
+    }
+    has_active_echoes_.store(!active_echoes_by_id_.empty(), std::memory_order_release);
 }
 
 bool EngineState::resolve_soul_icon_asset(std::string_view soul_key, std::string& out_asset) const

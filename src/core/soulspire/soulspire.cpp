@@ -208,6 +208,7 @@ void on_gui_device(void* device)
 
 void on_gui_release()
 {
+    echo_icons::release_device_resources();
     textures::release_all();
 }
 
@@ -228,6 +229,7 @@ void shutdown()
 {
     const UiInputTransition tr = input_ownership().release_all("shutdown", GetTickCount64());
     apply_input_transition(tr);
+    echo_icons::release_device_resources();
     textures::release_all();
     hooks::uninstall();
     engine().set_enabled(false);
