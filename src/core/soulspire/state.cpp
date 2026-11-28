@@ -830,6 +830,8 @@ bool EngineState::lookup_action(ActionKind kind, std::uint16_t action_id, Action
         out = {};
         out.kind = ActionKind::Spell;
         out.action_id = action_id;
+        out.icon_id = cit->second.icon_id;
+        out.icon_id_v2 = cit->second.icon_id_v2;
         out.name = cit->second.name;
         out.description = cit->second.description;
         return true;
@@ -1012,6 +1014,16 @@ bool EngineState::load_companions_json(std::string_view json_text)
                         if (!s.parse_int(v)) return false;
                         if (v >= kTrustSpellBaseId && v <= kTrustSpellLastSoulId)
                             rec.spell_id = static_cast<std::uint16_t>(v);
+                    } else if (fkey == "iconId") {
+                        std::int64_t v = 0;
+                        if (!s.parse_int(v)) return false;
+                        if (v >= 0 && v <= 0xFFFE)
+                            rec.icon_id = static_cast<std::uint16_t>(v);
+                    } else if (fkey == "iconIdV2") {
+                        std::int64_t v = 0;
+                        if (!s.parse_int(v)) return false;
+                        if (v >= 0 && v <= 0xFFFE)
+                            rec.icon_id_v2 = static_cast<std::uint16_t>(v);
                     } else if (fkey == "soulId") {
                         if (!s.parse_string(rec.soul_id)) return false;
                     } else if (fkey == "displayName") {

@@ -81,6 +81,8 @@ constexpr std::uint16_t kTrustSpellMaxId      = 1023;
 
 struct CompanionSpellEntry {
     std::uint16_t spell_id = 0;
+    std::uint16_t icon_id = 0xFFFFu;
+    std::uint16_t icon_id_v2 = 0xFFFFu;
     std::string soul_id;
     std::string name;
     std::string description;

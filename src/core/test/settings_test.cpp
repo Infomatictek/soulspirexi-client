@@ -940,6 +940,27 @@ int main()
         check(!st.lookup_action(ActionKind::Spell, 1018, trust_leak) &&
                   !st.lookup_action(ActionKind::Spell, 1019, trust_leak),
               "lookup_action never returns metadata for legacy Trust spells 1018/1019");
+        // Verify dynamic role icon resolution (iconId / iconIdV2) for Soul Echoes via hook_magic_icon pipeline
+        const char* role_icons_json = R"json({
+            "companionHash": "roleicon1",
+            "companions": [
+                {"spellId": 896, "soulId": "war_support", "displayName": "Commander", "description": "Commander (WAR Support) - Tactical buffer.", "iconId": 22, "iconIdV2": 1014},
+                {"spellId": 897, "soulId": "war_dps", "displayName": "Berserker", "description": "Berserker (WAR Damage) - Dual Great Axe.", "iconId": 22, "iconIdV2": 1010},
+                {"spellId": 898, "soulId": "war_tank", "displayName": "Spartan", "description": "Spartan (WAR Tank) - Polearm and shield.", "iconId": 22, "iconIdV2": 1000},
+                {"spellId": 902, "soulId": "whm_healer", "displayName": "Bishop", "description": "Bishop (WHM Healer) - Barrier Cure healer.", "iconId": 22, "iconIdV2": 1038}
+            ]
+        })json";
+        check(st.load_companions_json(role_icons_json), "load_companions_json parses iconId/iconIdV2");
+        st.set_companions_enabled(true);
+        ActionRecord r_sup{}, r_dps{}, r_tnk{}, r_hlr{};
+        check(st.lookup_action(ActionKind::Spell, 896, r_sup) && r_sup.icon_id == 22 && r_sup.icon_id_v2 == 1014,
+              "Support Echo resolves native Gold Support icon (22, 1014)");
+        check(st.lookup_action(ActionKind::Spell, 897, r_dps) && r_dps.icon_id == 22 && r_dps.icon_id_v2 == 1010,
+              "Damage Echo resolves native Red Crossed Swords icon (22, 1010)");
+        check(st.lookup_action(ActionKind::Spell, 898, r_tnk) && r_tnk.icon_id == 22 && r_tnk.icon_id_v2 == 1000,
+              "Tank Echo resolves native Blue Shield icon (22, 1000)");
+        check(st.lookup_action(ActionKind::Spell, 902, r_hlr) && r_hlr.icon_id == 22 && r_hlr.icon_id_v2 == 1038,
+              "Healer Echo resolves native Green Healing Cross icon (22, 1038)");
         st.reset_session();
     }
 
